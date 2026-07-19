@@ -116,8 +116,14 @@ export default function ParentDashboard({
   const [editItemHidden, setEditItemHidden] = useState(false);
   const [isCreateChoreModalOpen, setIsCreateChoreModalOpen] = useState(false);
   const [itemRequiresInput, setItemRequiresInput] = useState(false);
+  const [itemIsChest, setItemIsChest] = useState(false);
+  const [itemChestMin, setItemChestMin] = useState(10);
+  const [itemChestMax, setItemChestMax] = useState(100);
   const [itemInputLabel, setItemInputLabel] = useState("");
   const [editItemRequiresInput, setEditItemRequiresInput] = useState(false);
+  const [editItemIsChest, setEditItemIsChest] = useState(false);
+  const [editItemChestMin, setEditItemChestMin] = useState(10);
+  const [editItemChestMax, setEditItemChestMax] = useState(100);
   const [editItemInputLabel, setEditItemInputLabel] = useState("");
 
   const startEditingItem = (item: MarketItem) => {
@@ -127,6 +133,9 @@ export default function ParentDashboard({
     setEditItemCost(item.points);
     setEditItemImage(item.image);
     setEditItemRequiresInput(item.requiresInput || false);
+    setEditItemIsChest(item.isChest || false);
+    setEditItemChestMin(item.chestMin || 10);
+    setEditItemChestMax(item.chestMax || 100);
     setEditItemInputLabel(item.inputLabel || "");
     setEditItemStock(item.stock);
     setEditItemCategory(item.category || "");
@@ -530,6 +539,9 @@ export default function ParentDashboard({
       setItemHidden(false);
       setItemRequiresInput(false);
       setItemInputLabel("");
+      setItemIsChest(false);
+      setItemChestMin(10);
+      setItemChestMax(100);
       showAlert("Успешно", "Товар успешно добавлен в магазин!");
     } catch (err) {
       console.error("Failed to create market item:", err);

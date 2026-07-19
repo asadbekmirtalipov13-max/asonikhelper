@@ -56,6 +56,9 @@ export interface MarketItem {
   createdBy: string;
   createdAt: any;
   category?: string; // e.g. "Игры", "Развлечения", "Сладости", "Другое"
+  isChest?: boolean;
+  chestMin?: number;
+  chestMax?: number;
   pinned?: boolean; // Featured at the top
   hidden?: boolean; // Hidden/soft-deleted
   sortOrder?: number; // For manual ordering

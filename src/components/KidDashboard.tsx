@@ -96,7 +96,7 @@ export default function KidDashboard({
   const [purchaseCustomInput, setPurchaseCustomInput] = useState("");
 
   const [transferTargetId, setTransferTargetId] = useState("");
-  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  
   const [timeLeftToNextDay, setTimeLeftToNextDay] = useState("");
 
   useEffect(() => {
@@ -118,42 +118,8 @@ export default function KidDashboard({
   const [loadingTransfer, setLoadingTransfer] = useState(false);
 
   
-  const handleOpenNotifications = async () => {
-    setIsNotificationsOpen(true);
-    // Mark unread as read
-    const unread = myNotifications.filter(n => !n.read);
-    for (const n of unread) {
-      await updateDoc(doc(db, "notifications", n.id), { read: true });
-    }
-  };
+    
   
-  const handleOpenChest = async (notification) => {
-    if (!notification.chestPoints) return;
-    
-    // Add points
-    const kidRef = doc(db, "users", currentUser.id);
-    const newBalance = currentUser.points + notification.chestPoints;
-    await updateDoc(kidRef, { points: newBalance });
-    
-    // Log transaction
-    const txId = "tx-chest-" + Math.random().toString(36).substr(2, 9);
-    await setDoc(doc(db, "transactions", txId), {
-      id: txId,
-      kidId: currentUser.id,
-      kidName: currentUser.name,
-      type: "income",
-      amount: notification.chestPoints,
-      title: "Открыт подарочный сундук!",
-      createdAt: new Date(),
-      balanceAfter: newBalance
-    });
-    
-    // Update notification so it can't be opened again
-    await updateDoc(doc(db, "notifications", notification.id), { chestPoints: 0, title: notification.title + " (Открыто)" });
-    
-    showAlert("ОТКРЫТ СУНДУК! 🎉", `Вы получили ${notification.chestPoints} монет из сундука!`);
-  };
-
 
   const handleTransferCoins = async () => {
     const amount = Number(transferAmount);
@@ -679,61 +645,106 @@ export default function KidDashboard({
 
     setLoading(true);
     try {
-      const purchaseId = "purchase-" + Math.random().toString(36).substr(2, 9);
       const kidRef = doc(db, "users", currentUser.id);
       const itemRef = doc(db, "marketplace", item.id);
-
-      // 1. Deduct points from child balance
-      const newPoints = currentUser.points - finalPrice;
-      await updateDoc(kidRef, { points: newPoints });
-
-      // Log transaction
-      const txId = "tx-buy-" + Math.random().toString(36).substr(2, 9);
-      await setDoc(doc(db, "transactions", txId), {
-        id: txId,
-        kidId: currentUser.id,
-        kidName: currentUser.name,
-        type: "expense",
-        amount: finalPrice,
-        title: `Покупка товара: ${item.title}`,
-        createdAt: new Date(),
-        balanceAfter: newPoints
-      });
-
-      // 2. Decrement store inventory if stock positive
-      if (item.stock > 0) {
-        await updateDoc(itemRef, { stock: Math.max(0, item.stock - 1) });
-      }
-
-      // 3. Save purchase log record in DB
-      const newPurchase: Purchase = {
+      
+      if (item.isChest) {
+        // CHEST LOGIC
+        const min = item.chestMin || 10;
+        const max = item.chestMax || 100;
+        const reward = Math.floor(Math.random() * (max - min + 1)) + min;
+        
+        const newBalance = currentUser.points - finalPrice + reward;
+        await updateDoc(kidRef, { points: newBalance });
+        
+        // Log purchase transaction
+        const txId = "tx-" + Math.random().toString(36).substr(2, 9);
+        await setDoc(doc(db, "transactions", txId), {
+          id: txId,
+          kidId: currentUser.id,
+          kidName: currentUser.name,
+          type: "expense",
+          amount: finalPrice,
+          description: `Куплен Сундук: ${item.title}`,
+          createdAt: new Date(),
+          balanceAfter: currentUser.points - finalPrice
+        });
+        
+        // Log reward transaction
+        const txRewardId = "tx-" + Math.random().toString(36).substr(2, 9);
+        await setDoc(doc(db, "transactions", txRewardId), {
+          id: txRewardId,
+          kidId: currentUser.id,
+          kidName: currentUser.name,
+          type: "income",
+          amount: reward,
+          description: `Награда из Сундука: ${item.title}`,
+          createdAt: new Date(),
+          balanceAfter: newBalance
+        });
+        
+        if (item.stock > 0) {
+          await updateDoc(itemRef, { stock: item.stock - 1 });
+        }
+        
+        if (settings.telegramChatId) {
+          await sendTelegramNotification(
+            `📦 <b>Открыт Сундук!</b>\nРебенок: ${currentUser.name} ${currentUser.avatar}\nСундук: <b>${item.title}</b>\nВыпало: 🪙 <b>${reward} монет</b>\nНовый баланс: <b>${newBalance}</b>`,
+            settings.telegramChatId
+          );
+        }
+        
+        showAlert("Сундук Открыт! 📦", `Вы открыли сундук и нашли там ${reward} монет! 🎉`);
+      } else {
+        // REGULAR PURCHASE LOGIC
+        const purchaseId = "purchase-" + Math.random().toString(36).substr(2, 9);
+        
+        await updateDoc(kidRef, { points: currentUser.points - finalPrice });
+        
+        await setDoc(doc(db, "purchases", purchaseId), {
           id: purchaseId,
+          kidId: currentUser.id,
+          kidName: currentUser.name,
           productId: item.id,
           productTitle: item.title,
           productImage: item.image,
           points: finalPrice,
-          kidId: currentUser.id,
-          kidName: currentUser.name,
           status: "pending",
           createdAt: new Date(),
-          customInput: item.requiresInput ? purchaseCustomInput.trim() : undefined
-        };
+          customInput: purchaseCustomInput || undefined
+        });
 
-      await setDoc(doc(db, "purchases", purchaseId), newPurchase);
+        const txId = "tx-" + Math.random().toString(36).substr(2, 9);
+        await setDoc(doc(db, "transactions", txId), {
+          id: txId,
+          kidId: currentUser.id,
+          kidName: currentUser.name,
+          type: "expense",
+          amount: finalPrice,
+          description: `Покупка: ${item.title}`,
+          createdAt: new Date(),
+          balanceAfter: currentUser.points - finalPrice
+        });
 
-      // 4. Send Telegram notification to parent
-      if (settings.telegramChatId) {
-        await sendTelegramNotification(
-          `🎉 <b>Новая покупка в Маркете!</b>\nПокупатель: ${currentUser.name} ${currentUser.avatar}\nПриз: <b>${item.title}</b>\nСписано: 🪙 <b>${finalPrice} монет</b>\n\n<i>Родители, пожалуйста, подтвердите выдачу в админ-панели!</i>`,
-          settings.telegramChatId
-        );
+        if (item.stock > 0) {
+          await updateDoc(itemRef, { stock: item.stock - 1 });
+        }
+
+        if (settings.telegramChatId) {
+          await sendTelegramNotification(
+            `🎉 <b>Новая покупка в Маркете!</b>\nПокупатель: ${currentUser.name} ${currentUser.avatar}\nПриз: <b>${item.title}</b>\nСписано: 🪙 <b>${finalPrice} монет</b>\n\n<i>Родители, пожалуйста, подтвердите выдачу в админ-панели!</i>`,
+            settings.telegramChatId
+          );
+        }
+
+        showAlert("Поздравляем! 🎉", `Успешно куплено! 🎉 С вашего счета списано ${finalPrice} монет. Ваша заявка успешно принята, ждите подтверждения!`);
       }
-
-      showAlert("Поздравляем! 🎉", `Успешно куплено! 🎉 С вашего счета списано ${finalPrice} монет. Ваша заявка успешно принята, ждите подтверждения!`);
+      
       setConfirmPurchaseItem(null);
       setPurchaseCustomInput("");
     } catch (err) {
       console.error("Failed to purchase item:", err);
+      showAlert("Ошибка", "Не удалось завершить покупку");
     } finally {
       setLoading(false);
     }
@@ -779,7 +790,7 @@ export default function KidDashboard({
               <div className="text-xl md:text-3xl font-black mt-0.5 tracking-tight">🪙 {currentUser.points}</div>
             </div>
             <button 
-              onClick={() => setInternalActiveTab("profile")}
+              onClick={() => setActiveTab("profile")}
               className="p-2 bg-black/10 hover:bg-black/20 rounded-xl transition-colors cursor-pointer"
               title="История операций"
             >
@@ -787,25 +798,7 @@ export default function KidDashboard({
             </button>
           </div>
         </div>
-
-        
-        <button
-          onClick={handleOpenNotifications}
-          className="bg-white border border-slate-200 rounded-3xl p-4 flex flex-col items-center justify-center shadow-md relative hover:bg-slate-50 transition-colors group cursor-pointer"
-        >
-          <div className="relative">
-            <span className="text-3xl group-hover:scale-110 transition-transform block">🔔</span>
-            {unreadCount > 0 && (
-              <span className="absolute -top-1 -right-2 bg-rose-500 text-white font-extrabold text-[10px] w-5 h-5 flex items-center justify-center rounded-full animate-bounce shadow-md">
-                {unreadCount}
-              </span>
-            )}
-          </div>
-          <div className="text-[10px] font-black text-slate-500 uppercase mt-2">Уведомления</div>
-        </button>
-
-
-        {/* Daily Streak */}
+{/* Daily Streak */}
         <div className="bg-orange-100/60 border border-orange-200 rounded-3xl p-4 flex items-center justify-between shadow-sm relative overflow-hidden group">
           <div className="absolute -bottom-6 -right-6 text-7xl select-none opacity-10 group-hover:scale-110 transition-transform">🔥</div>
           <div>
@@ -1795,63 +1788,7 @@ export default function KidDashboard({
       </AnimatePresence>
 
       
-      {/* Notifications Modal */}
-      <AnimatePresence>
-        {isNotificationsOpen && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-3xl overflow-hidden max-w-md w-full shadow-2xl border border-slate-100 flex flex-col max-h-[85vh]"
-            >
-              <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-                <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
-                  🔔 Ваши уведомления
-                </h3>
-                <button
-                  onClick={() => setIsNotificationsOpen(false)}
-                  className="p-1.5 hover:bg-slate-200 text-slate-400 hover:text-slate-700 rounded-lg text-xs font-bold cursor-pointer"
-                >
-                  Закрыть
-                </button>
-              </div>
-              <div className="p-5 overflow-y-auto space-y-3 bg-slate-50">
-                {myNotifications.length === 0 ? (
-                  <div className="text-center p-8 text-slate-400 text-xs font-bold">
-                    У вас пока нет уведомлений.
-                  </div>
-                ) : (
-                  myNotifications.map(n => (
-                    <div key={n.id} className="p-4 bg-white rounded-2xl shadow-sm border border-slate-100 flex gap-3 relative">
-                      <div className="text-2xl shrink-0">
-                        {n.type === "chest" ? "📦" : n.type === "message" ? "💬" : n.type === "quest" ? "📜" : "ℹ️"}
-                      </div>
-                      <div className="flex-1 space-y-1">
-                        <h4 className="font-bold text-slate-800 text-xs">{n.title}</h4>
-                        <p className="text-[10px] text-slate-500 leading-relaxed whitespace-pre-wrap">{n.text}</p>
-                        
-                        {n.type === "chest" && n.chestPoints > 0 && (
-                          <button
-                            onClick={() => handleOpenChest(n)}
-                            className="mt-2 w-full py-2 bg-gradient-to-r from-amber-400 to-orange-500 text-white font-black text-[10px] rounded-xl shadow-sm hover:shadow-md hover:scale-[1.02] transition-all flex items-center justify-center gap-1 cursor-pointer"
-                          >
-                            <Sparkles className="w-3 h-3" /> Открыть Сундук!
-                          </button>
-                        )}
-                        
-                        <div className="text-[8px] text-slate-300 font-bold mt-1 text-right">
-                          {n.createdAt?.toDate ? n.createdAt.toDate().toLocaleString("ru-RU") : "Только что"}
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      
 
       {/* PURCHASE CONFIRMATION MODAL */}
       <AnimatePresence>

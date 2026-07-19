@@ -11,7 +11,7 @@ import ParentDashboard from "./components/ParentDashboard";
 import KidDashboard from "./components/KidDashboard";
 import AdminPanel from "./components/AdminPanel";
 import { 
-  LogOut, Shield, Award, ShoppingBag, Settings, Star, Flame, Sparkles
+  LogOut, Shield, Award, ShoppingBag, Settings, Star, Flame, Sparkles, Bell, X, Package
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -34,7 +34,8 @@ export default function App() {
   });
 
   // Admin routing state: parents can toggle between dashboard and settings
-  const [currentView, setCurrentView] = useState<"dashboard" | "admin">("dashboard");
+  const [currentView, setCurrentView] = useState<"dashboard" | "admin" | "store">("dashboard");
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [kidActiveTab, setKidActiveTab] = useState<"quests" | "store" | "daily" | "profile">("quests");
   const [dbLoading, setDbLoading] = useState(true);
 
@@ -235,6 +236,27 @@ export default function App() {
     setCurrentView("dashboard");
   };
 
+  
+  const handleOpenChest = async (notification: any) => {
+    if (!notification.chestPoints) return;
+    const kidRef = doc(db, "users", currentUser.id);
+    const newBalance = currentUser.points + notification.chestPoints;
+    await updateDoc(kidRef, { points: newBalance });
+    const txId = "tx-chest-" + Math.random().toString(36).substr(2, 9);
+    await setDoc(doc(db, "transactions", txId), {
+      id: txId,
+      kidId: currentUser.id,
+      kidName: currentUser.name,
+      type: "income",
+      amount: notification.chestPoints,
+      description: "Открыт сундук!",
+      createdAt: new Date()
+    });
+    await updateDoc(doc(db, "notifications", notification.id), { chestPoints: 0, title: notification.title + " (Открыто)" });
+    showAlert("ОТКРЫТ СУНДУК! 🎉", `Вы получили ${notification.chestPoints} монет из сундука!`);
+  };
+  
+
   const handleLogout = () => {
     setCurrentUser(null);
     localStorage.removeItem("family_user_session");
@@ -432,6 +454,27 @@ export default function App() {
               </div>
             </div>
 
+            
+            {/* Notifications */}
+            {currentUser.role === "kid" && (
+              <button
+                onClick={() => {
+                  setIsNotificationsOpen(true);
+                  const unread = notifications.filter(n => n.kidId === currentUser.id && !n.read);
+                  unread.forEach(n => {
+                    updateDoc(doc(db, "notifications", n.id), { read: true });
+                  });
+                }}
+                className="relative p-2 text-slate-400 hover:text-indigo-500 hover:bg-indigo-50 rounded-xl transition-all border border-transparent hover:border-indigo-100 cursor-pointer"
+                title="Уведомления"
+              >
+                <Bell className="w-5 h-5" />
+                {notifications.filter(n => n.kidId === currentUser.id && !n.read).length > 0 && (
+                  <span className="absolute top-1 right-1 bg-rose-500 w-2.5 h-2.5 rounded-full border-2 border-white"></span>
+                )}
+              </button>
+            )}
+
             {/* Logout */}
             <button
               onClick={handleLogout}
@@ -517,6 +560,63 @@ export default function App() {
             )}
           </motion.div>
         </AnimatePresence>
+      {/* Notifications Modal */}
+      <AnimatePresence>
+        {isNotificationsOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl overflow-hidden max-w-md w-full shadow-2xl border border-slate-100 flex flex-col max-h-[85vh]"
+            >
+              <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+                <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
+                  🔔 Ваши уведомления
+                </h3>
+                <button
+                  onClick={() => setIsNotificationsOpen(false)}
+                  className="p-1.5 hover:bg-slate-200 text-slate-400 hover:text-slate-700 rounded-lg text-xs font-bold cursor-pointer"
+                >
+                  Закрыть
+                </button>
+              </div>
+              <div className="p-5 overflow-y-auto space-y-3 bg-slate-50">
+                {notifications.filter(n => n.kidId === currentUser.id).length === 0 ? (
+                  <div className="text-center p-8 text-slate-400 text-xs font-bold">
+                    У вас пока нет уведомлений.
+                  </div>
+                ) : (
+                  notifications.filter(n => n.kidId === currentUser.id).map(n => (
+                    <div key={n.id} className="p-4 bg-white rounded-2xl shadow-sm border border-slate-100 flex gap-3 relative">
+                      <div className="text-2xl shrink-0">
+                        {n.type === "chest" ? "📦" : n.type === "message" ? "💬" : n.type === "quest" ? "📜" : "ℹ️"}
+                      </div>
+                      <div className="flex-1 space-y-1">
+                        <h4 className="font-bold text-slate-800 text-xs">{n.title}</h4>
+                        <p className="text-[10px] text-slate-500 leading-relaxed whitespace-pre-wrap">{n.text}</p>
+                        
+                        {n.type === "chest" && n.chestPoints > 0 && (
+                          <button
+                            onClick={() => handleOpenChest(n)}
+                            className="mt-2 w-full py-2 bg-gradient-to-r from-amber-400 to-orange-500 text-white font-black text-[10px] rounded-xl shadow-sm hover:shadow-md hover:scale-[1.02] transition-all flex items-center justify-center gap-1 cursor-pointer"
+                          >
+                            <Sparkles className="w-3 h-3" /> Открыть Сундук!
+                          </button>
+                        )}
+                        
+                        <div className="text-[8px] text-slate-300 font-bold mt-1 text-right">
+                          {n.createdAt?.toDate ? n.createdAt.toDate().toLocaleString("ru-RU") : "Только что"}
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
       </main>
 
       {/* Small beautiful human credit line footer */}
