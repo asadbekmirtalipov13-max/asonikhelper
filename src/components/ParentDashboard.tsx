@@ -46,6 +46,7 @@ export default function ParentDashboard({
   const [choreDesc, setChoreDesc] = useState("");
   const [chorePoints, setChorePoints] = useState(10);
   const [choreExecutionLimit, setChoreExecutionLimit] = useState(60);
+  const [choreUrgent, setChoreUrgent] = useState(false);
   const [selectedKids, setSelectedKids] = useState<string[]>([]);
   
   // Custom points input state for partial approval
@@ -246,6 +247,7 @@ export default function ParentDashboard({
       setChoreExecutionLimit(preset.executionLimitMinutes);
     } else {
       setChoreExecutionLimit(60);
+      setChoreUrgent(false);
     }
   };
 
@@ -266,17 +268,23 @@ export default function ParentDashboard({
         const now = new Date();
         const timeoutAt = new Date(now.getTime() + timeoutMinutes * 60 * 1000);
 
+        const isUrgent = choreUrgent;
+        const finalPoints = isUrgent ? Number(chorePoints) * 2 : Number(chorePoints);
+        const finalLimit = isUrgent ? Math.max(1, Math.floor(choreExecutionLimit / 2)) : choreExecutionLimit;
+
         const newChore: Chore = {
           id: choreId,
           title: choreTitle.trim(),
           description: choreDesc.trim(),
-          points: Number(chorePoints),
+          points: finalPoints,
+          executionLimitMinutes: finalLimit,
+          isUrgent: isUrgent,
           assignedTo: [kidId],
           status: "pending",
           createdAt: now,
           createdBy: currentUser.id,
           timeoutAt: timeoutAt,
-          executionLimitMinutes: Number(choreExecutionLimit)
+          // executionLimitMinutes already set above
         };
 
         await setDoc(doc(db, "chores", choreId), newChore);
@@ -828,6 +836,19 @@ export default function ParentDashboard({
                   <option value={180}>⏱️ 3 часа (180 мин)</option>
                   <option value={1440}>⏱️ 1 сутки (24 часа)</option>
                 </select>
+              </div>
+
+              <div className="flex items-center gap-2 mt-2 bg-rose-50 p-3 rounded-xl border border-rose-100">
+                <input
+                  type="checkbox"
+                  id="urgent"
+                  checked={choreUrgent}
+                  onChange={(e) => setChoreUrgent(e.target.checked)}
+                  className="w-4 h-4 text-rose-500 rounded focus:ring-rose-500 cursor-pointer accent-rose-500"
+                />
+                <label htmlFor="urgent" className="text-xs font-black text-rose-600 uppercase cursor-pointer select-none">
+                  ⚡ Срочное задание (Награда X2, Время /2)
+                </label>
               </div>
 
               <div>

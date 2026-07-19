@@ -111,28 +111,26 @@ export function compressImageFile(file: File, maxW = 1024, maxH = 1024, quality 
  * Helper to upload a base64 encoded image to IMGBB via the Express server proxy.
  * This keeps the IMGBB API key secure.
  */
+const IMGBB_API_KEY = (import.meta as any).env.VITE_IMGBB_API_KEY || '88c6cd2b32b499fd1e7272926e44bc3d';
+
 export async function uploadImageToImgbb(base64Image: string): Promise<string | null> {
   try {
-    // Automatically downscale before uploading to keep network light and avoid limits
     const optimizedBase64 = await resizeBase64Image(base64Image, 1024, 1024);
-
-    const response = await fetch("/api/upload", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ image: optimizedBase64 })
+    const cleanBase64 = optimizedBase64.replace(/^data:image\/\w+;base64,/, '');
+    const formData = new FormData();
+    formData.append('image', cleanBase64);
+    const response = await fetch('https://api.imgbb.com/1/upload?key=' + IMGBB_API_KEY, {
+      method: 'POST',
+      body: formData
     });
-    
     const data = await response.json();
-    if (data.success && data.url) {
-      return data.url;
+    if (data.success && data.data && data.data.url) {
+      return data.data.url;
     }
-    console.error("IMGBB upload error from proxy:", data.error);
+    console.error('IMGBB upload error:', data.error);
     return null;
   } catch (error) {
-    console.error("Failed to upload image via proxy:", error);
+    console.error('Failed to upload image:', error);
     return null;
   }
 }
-

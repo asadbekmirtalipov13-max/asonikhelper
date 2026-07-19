@@ -40,6 +40,7 @@ export interface Chore {
   completedAt?: any;
   proofPhoto?: string; // URL from IMGBB
   parentFeedback?: string; // Feedback from parent on approval/rejection
+  isUrgent?: boolean;
   finalPoints?: number; // Actual points awarded by parent
   executionLimitMinutes?: number; // Completion time limit set by parent (defaults to 60)
 }

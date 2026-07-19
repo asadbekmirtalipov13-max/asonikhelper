@@ -92,6 +92,23 @@ export default function KidDashboard({
   const [confirmPurchaseItem, setConfirmPurchaseItem] = useState<MarketItem | null>(null);
 
   const [transferTargetId, setTransferTargetId] = useState("");
+  const [timeLeftToNextDay, setTimeLeftToNextDay] = useState("");
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const gmt5Now = new Date(new Date().getTime() + 5 * 60 * 60 * 1000);
+      const nextMidnight = new Date(gmt5Now);
+      nextMidnight.setUTCHours(24, 0, 0, 0); // Next midnight in GMT+5
+      const diff = nextMidnight.getTime() - gmt5Now.getTime();
+      
+      const hours = Math.floor((diff / (1000 * 60 * 60)) % 24);
+      const minutes = Math.floor((diff / 1000 / 60) % 60);
+      const seconds = Math.floor((diff / 1000) % 60);
+      
+      setTimeLeftToNextDay(`${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
   const [transferAmount, setTransferAmount] = useState("");
   const [loadingTransfer, setLoadingTransfer] = useState(false);
 
@@ -197,7 +214,9 @@ export default function KidDashboard({
     });
 
   // 1. Daily Check-in Claim logic
-  const todayStr = now.toISOString().split("T")[0]; // YYYY-MM-DD
+  // Use GMT+5 for date tracking
+  const gmt5Now = new Date(now.getTime() + 5 * 60 * 60 * 1000);
+  const todayStr = gmt5Now.toISOString().split("T")[0]; // YYYY-MM-DD
   const canClaimDaily = currentUser.lastCheckIn !== todayStr;
   
   // Calculate if the streak is broken:
@@ -235,7 +254,39 @@ export default function KidDashboard({
         isChestDay = true;
       }
       
+      let wonMarketItem = null;
+      if (newStreak === 29) {
+        // Random prize from market
+        if (marketItems.length > 0) {
+           wonMarketItem = marketItems[Math.floor(Math.random() * marketItems.length)];
+           isChestDay = true;
+        }
+      }
+      
       const totalEarnedToday = basePoints + chestPoints;
+      
+      if (wonMarketItem) {
+        const purchaseId = "purchase-" + Math.random().toString(36).substr(2, 9);
+        const newPurchase: Purchase = {
+          id: purchaseId,
+          productId: wonMarketItem.id,
+          productTitle: wonMarketItem.title,
+          productImage: wonMarketItem.image,
+          points: 0, // Free prize
+          kidId: currentUser.id,
+          kidName: currentUser.name,
+          status: "pending",
+          createdAt: new Date()
+        };
+        await setDoc(doc(db, "purchases", purchaseId), newPurchase);
+        
+        if (settings.telegramChatId) {
+          await sendTelegramNotification(
+            `🎁 <b>Ребенок выиграл приз из магазина!</b>\nРебенок: ${currentUser.name} ${currentUser.avatar}\nДень: 29\nПриз: <b>${wonMarketItem.title}</b>\n\n<i>Выдайте его в админ-панели!</i>`,
+            settings.telegramChatId
+          );
+        }
+      }
       const newBalance = currentUser.points + totalEarnedToday;
 
       await updateDoc(kidRef, {
@@ -281,24 +332,29 @@ export default function KidDashboard({
 
   const handleRestoreStreak = async () => {
     if (loading) return;
+    const gmt5Now = new Date(new Date().getTime() + 5 * 60 * 60 * 1000);
 
-    const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const currentMonthStr = `${gmt5Now.getFullYear()}-${String(gmt5Now.getMonth() + 1).padStart(2, '0')}`;
     const restoresUsed = (currentUser.lastRestoreMonth === currentMonthStr) 
       ? (currentUser.restoresUsedThisMonth || 0) 
       : 0;
 
-    const isFree = restoresUsed < 2;
-    const cost = isFree ? 0 : 200;
+    if (restoresUsed >= 5) {
+      showAlert("Лимит исчерпан", "Вы исчерпали лимит в 5 восстановлений в этом месяце.");
+      return;
+    }
 
-    if (!isFree && currentUser.points < cost) {
-      showAlert("Недостаточно монет 🪙", "У тебя нет 200 монет для платного восстановления серии.");
+    const isFree = restoresUsed === 0;
+    const cost = isFree ? 0 : 200 * Math.pow(2, restoresUsed - 1);
+
+    if (currentUser.points < cost) {
+      showAlert("Недостаточно монет 🪙", `Восстановление стоит ${cost} монет. У вас недостаточно средств.`);
       return;
     }
 
     setLoading(true);
     try {
-      const yesterday = new Date(now);
-      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterday = new Date(gmt5Now.getTime() - 24 * 60 * 60 * 1000);
       const yesterdayStr = yesterday.toISOString().split("T")[0];
 
       const kidRef = doc(db, "users", currentUser.id);
@@ -432,7 +488,7 @@ export default function KidDashboard({
 
           const choreRef = doc(db, "chores", choreId);
           await updateDoc(choreRef, {
-            status: "pending",
+            status: "declined",
             acceptedBy: null
           });
 
@@ -642,7 +698,7 @@ export default function KidDashboard({
         );
       }
 
-      showAlert("Поздравляем! 🎉", `Успешно куплено! 🎉 С вашего счета списано ${finalPrice} монет. Обратитесь к родителям, чтобы забрать приз!`);
+      showAlert("Поздравляем! 🎉", `Успешно куплено! 🎉 С вашего счета списано ${finalPrice} монет. Ваша заявка успешно принята, ждите подтверждения!`);
       setConfirmPurchaseItem(null);
     } catch (err) {
       console.error("Failed to purchase item:", err);
@@ -685,9 +741,18 @@ export default function KidDashboard({
         {/* Points Counter */}
         <div className="bg-gradient-to-br from-amber-400 via-yellow-500 to-orange-500 text-white rounded-3xl p-4 flex flex-col justify-between shadow-md relative overflow-hidden group">
           <div className="absolute -bottom-6 -right-6 text-7xl select-none opacity-15 group-hover:scale-110 transition-transform">🪙</div>
-          <div>
-            <div className="text-[9px] font-black text-amber-100 uppercase tracking-wider">Мой баланс</div>
-            <div className="text-xl md:text-3xl font-black mt-0.5 tracking-tight">🪙 {currentUser.points}</div>
+          <div className="flex justify-between items-start z-10 relative">
+            <div>
+              <div className="text-[9px] font-black text-amber-100 uppercase tracking-wider">Мой баланс</div>
+              <div className="text-xl md:text-3xl font-black mt-0.5 tracking-tight">🪙 {currentUser.points}</div>
+            </div>
+            <button 
+              onClick={() => setInternalActiveTab("profile")}
+              className="p-2 bg-black/10 hover:bg-black/20 rounded-xl transition-colors cursor-pointer"
+              title="История операций"
+            >
+              <RefreshCw className="w-5 h-5 text-white/90" />
+            </button>
           </div>
         </div>
 
@@ -1138,7 +1203,7 @@ export default function KidDashboard({
                 }`}
               >
                 <CheckCircle className="w-4 h-4" />
-                {canClaimDaily ? `Забрать: +${pointsToEarnToday} 🪙 монет!` : "Сегодня пройдено!"}
+                {canClaimDaily ? `Забрать: +${pointsToEarnToday} 🪙 монет!` : `Жди новый день: ${timeLeftToNextDay}`}
               </button>
             )}
           </div>
@@ -1555,7 +1620,7 @@ export default function KidDashboard({
                 ) : cameraActive ? (
                   <div className="w-full space-y-4">
                     <div className="w-full aspect-video rounded-2xl overflow-hidden border border-slate-300 bg-black relative">
-                      <video ref={videoRef} className="w-full h-full object-cover transform -scale-x-100" playsInline muted></video>
+                      <video ref={videoRef} className="w-full h-full object-cover" playsInline muted></video>
                     </div>
                     <button
                       onClick={handleCapturePhoto}
