@@ -88,6 +88,7 @@ export interface Transaction {
   kidName: string;
   type: "income" | "expense";
   amount: number;
+  description?: string;
   title: string;
   createdAt: any;
   balanceAfter?: number;
@@ -113,3 +114,11 @@ export interface AppNotification {
   type?: "message" | "chest" | "quest" | "system";
   chestPoints?: number;
 }
+
+export type PromoCode = {
+  id: string;
+  code: string;
+  points: number;
+  activationsLeft: number;
+  active: boolean;
+};

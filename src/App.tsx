@@ -36,7 +36,7 @@ export default function App() {
   // Admin routing state: parents can toggle between dashboard and settings
   const [currentView, setCurrentView] = useState<"dashboard" | "admin" | "store">("dashboard");
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
-  const [kidActiveTab, setKidActiveTab] = useState<"quests" | "store" | "daily" | "profile">("quests");
+  const [kidActiveTab, setKidActiveTab] = useState<"quests" | "store" | "daily" | "profile" | "history" | "achievements" | "games">("quests");
   const [dbLoading, setDbLoading] = useState(true);
 
   const palette = TAILWIND_COLOR_PALETTES[settings.primaryColor] || TAILWIND_COLOR_PALETTES.indigo;

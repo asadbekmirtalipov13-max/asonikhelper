@@ -290,7 +290,7 @@ export default function ParentDashboard({
 
         const isUrgent = choreUrgent;
         const finalPoints = isUrgent ? Number(chorePoints) * 2 : Number(chorePoints);
-        const finalLimit = isUrgent ? Math.max(1, Math.floor(choreExecutionLimit / 2)) : choreExecutionLimit;
+        const finalLimit = isUrgent ? 25 : choreExecutionLimit;
 
         const newChore: Chore = {
           id: choreId,
@@ -343,6 +343,7 @@ export default function ParentDashboard({
       setChorePoints(10);
       setChoreExecutionLimit(60);
       setSelectedKids([]);
+      setIsCreateChoreModalOpen(false);
       showAlert("Успешно", "Задание успешно создано и отправлено!");
     } catch (err) {
       console.error("Failed to create chore:", err);
@@ -1733,7 +1734,10 @@ export default function ParentDashboard({
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase">Цена (баллы 🪙)</label>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase flex justify-between">
+                    <span>Цена (баллы 🪙)</span>
+                    {choreUrgent && <span className="text-rose-500 font-black flex gap-1 items-center">🔥 Будет: {chorePoints * 2}</span>}
+                  </label>
                   <input
                     type="number"
                     min={1}
@@ -1754,10 +1758,12 @@ export default function ParentDashboard({
               <div>
                 <label className="block text-[10px] font-bold text-slate-400 uppercase">Время на выполнение</label>
                 <select
-                  value={choreExecutionLimit}
+                  value={choreUrgent ? 25 : choreExecutionLimit}
+                  disabled={choreUrgent}
                   onChange={(e) => setChoreExecutionLimit(Number(e.target.value))}
-                  className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                  className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer disabled:opacity-50"
                 >
+                  <option value={25} className={choreUrgent ? "block" : "hidden"}>⏱️ 25 минут (Срочное)</option>
                   <option value={15}>⏱️ 15 минут</option>
                   <option value={30}>⏱️ 30 минут</option>
                   <option value={45}>⏱️ 45 минут</option>
