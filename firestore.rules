@@ -31,5 +31,10 @@ service cloud.firestore {
     match /purchases/{purchaseId} {
       allow read, write: if true;
     }
+
+    // Transactions collection
+    match /transactions/{transactionId} {
+      allow read, write: if true;
+    }
   }
 }

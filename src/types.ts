@@ -57,6 +57,8 @@ export interface MarketItem {
   pinned?: boolean; // Featured at the top
   hidden?: boolean; // Hidden/soft-deleted
   sortOrder?: number; // For manual ordering
+  discountPercentage?: number; // 1-99%
+  discountUntil?: any; // Timestamp when sale ends
 }
 
 export interface Purchase {

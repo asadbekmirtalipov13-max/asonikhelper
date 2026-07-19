@@ -14,6 +14,7 @@ import { sendTelegramNotification } from "../utils/telegram";
 
 interface KidDashboardProps {
   currentUser: FamilyUser;
+  kids?: FamilyUser[];
   chores: Chore[];
   marketItems: MarketItem[];
   purchases: Purchase[];
@@ -28,6 +29,7 @@ interface KidDashboardProps {
 
 export default function KidDashboard({
   currentUser,
+  kids = [],
   chores,
   marketItems,
   purchases,
@@ -88,6 +90,83 @@ export default function KidDashboard({
 
   // Shop confirmation modal state
   const [confirmPurchaseItem, setConfirmPurchaseItem] = useState<MarketItem | null>(null);
+
+  const [transferTargetId, setTransferTargetId] = useState("");
+  const [transferAmount, setTransferAmount] = useState("");
+  const [loadingTransfer, setLoadingTransfer] = useState(false);
+
+  const handleTransferCoins = async () => {
+    const amount = Number(transferAmount);
+    if (!transferTargetId || isNaN(amount) || amount <= 0 || amount > 100) {
+      showAlert("Ошибка", "Некорректная сумма перевода (максимум 100).");
+      return;
+    }
+    if (currentUser.points < amount) {
+      showAlert("Не хватает монет", "У вас недостаточно монет для перевода.");
+      return;
+    }
+    const today = new Date().toISOString().split('T')[0];
+    const todayTransfers = transactions.filter(t => 
+      t.kidId === currentUser.id && 
+      t.type === "expense" && 
+      t.title.includes("Перевод") && 
+      (t.createdAt as any)?.toDate?.()?.toISOString().split('T')[0] === today
+    );
+    const todayTransferredAmount = todayTransfers.reduce((acc, t) => acc + t.amount, 0);
+    if (todayTransferredAmount + amount > 100) {
+      showAlert("Превышен лимит", `Вы можете перевести еще максимум ${100 - todayTransferredAmount} монет сегодня.`);
+      return;
+    }
+
+    setLoadingTransfer(true);
+    try {
+      const targetKid = kids.find(k => k.id === transferTargetId);
+      if (!targetKid) throw new Error("Target kid not found");
+
+      // Update current user (sender)
+      const newSenderBalance = currentUser.points - amount;
+      await updateDoc(doc(db, "users", currentUser.id), { points: newSenderBalance });
+
+      // Update target kid (receiver)
+      const newReceiverBalance = targetKid.points + amount;
+      await updateDoc(doc(db, "users", targetKid.id), { points: newReceiverBalance });
+
+      // Log transaction for sender
+      const txSenderId = "tx-transfer-out-" + Math.random().toString(36).substr(2, 9);
+      await setDoc(doc(db, "transactions", txSenderId), {
+        id: txSenderId,
+        kidId: currentUser.id,
+        kidName: currentUser.name,
+        type: "expense",
+        amount: amount,
+        title: `Перевод для ${targetKid.name}`,
+        createdAt: new Date(),
+        balanceAfter: newSenderBalance
+      });
+
+      // Log transaction for receiver
+      const txReceiverId = "tx-transfer-in-" + Math.random().toString(36).substr(2, 9);
+      await setDoc(doc(db, "transactions", txReceiverId), {
+        id: txReceiverId,
+        kidId: targetKid.id,
+        kidName: targetKid.name,
+        type: "income",
+        amount: amount,
+        title: `Перевод от ${currentUser.name}`,
+        createdAt: new Date(),
+        balanceAfter: newReceiverBalance
+      });
+
+      showAlert("Успешно!", `Вы перевели ${amount} монет для ${targetKid.name}.`);
+      setTransferAmount("");
+      setTransferTargetId("");
+    } catch (err) {
+      console.error(err);
+      showAlert("Ошибка", "Не удалось перевести монеты.");
+    } finally {
+      setLoadingTransfer(false);
+    }
+  };
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -289,6 +368,7 @@ export default function KidDashboard({
 
       await updateDoc(choreRef, {
         status: "accepted",
+        acceptedBy: currentUser.id,
         acceptedAt: new Date(),
         deadlineAt: deadlineAt
       });
@@ -311,9 +391,20 @@ export default function KidDashboard({
       async () => {
         try {
           const choreRef = doc(db, "chores", choreId);
-          await updateDoc(choreRef, {
-            status: "declined"
-          });
+          const chore = chores.find(c => c.id === choreId);
+          if (chore) {
+            const newAssignedTo = chore.assignedTo.filter(id => id !== currentUser.id);
+            if (newAssignedTo.length === 0) {
+              await updateDoc(choreRef, {
+                status: "declined",
+                assignedTo: newAssignedTo
+              });
+            } else {
+              await updateDoc(choreRef, {
+                assignedTo: newAssignedTo
+              });
+            }
+          }
 
           if (settings.telegramChatId) {
             await sendTelegramNotification(
@@ -341,7 +432,7 @@ export default function KidDashboard({
 
           const choreRef = doc(db, "chores", choreId);
           await updateDoc(choreRef, {
-            status: "declined",
+            status: "pending",
             acceptedBy: null
           });
 
@@ -491,7 +582,10 @@ export default function KidDashboard({
     if (!confirmPurchaseItem || loading) return;
     const item = confirmPurchaseItem;
 
-    if (currentUser.points < item.points) {
+    const isDiscounted = item.discountPercentage && item.discountUntil && (new Date(item.discountUntil?.toDate ? item.discountUntil.toDate() : item.discountUntil).getTime() > Date.now());
+    const finalPrice = isDiscounted ? Math.max(1, Math.floor(item.points * (1 - item.discountPercentage! / 100))) : item.points;
+
+    if (currentUser.points < finalPrice) {
       showAlert("Ой!", "Недостаточно баллов для покупки! Выполняйте больше квестов. 🧹");
       setConfirmPurchaseItem(null);
       return;
@@ -504,7 +598,7 @@ export default function KidDashboard({
       const itemRef = doc(db, "marketplace", item.id);
 
       // 1. Deduct points from child balance
-      const newPoints = currentUser.points - item.points;
+      const newPoints = currentUser.points - finalPrice;
       await updateDoc(kidRef, { points: newPoints });
 
       // Log transaction
@@ -514,7 +608,7 @@ export default function KidDashboard({
         kidId: currentUser.id,
         kidName: currentUser.name,
         type: "expense",
-        amount: item.points,
+        amount: finalPrice,
         title: `Покупка товара: ${item.title}`,
         createdAt: new Date(),
         balanceAfter: newPoints
@@ -531,7 +625,7 @@ export default function KidDashboard({
         productId: item.id,
         productTitle: item.title,
         productImage: item.image,
-        points: item.points,
+        points: finalPrice,
         kidId: currentUser.id,
         kidName: currentUser.name,
         status: "pending",
@@ -543,12 +637,12 @@ export default function KidDashboard({
       // 4. Send Telegram notification to parent
       if (settings.telegramChatId) {
         await sendTelegramNotification(
-          `🎉 <b>Новая покупка в Маркете!</b>\nПокупатель: ${currentUser.name} ${currentUser.avatar}\nПриз: <b>${item.title}</b>\nСписано: 🪙 <b>${item.points} монет</b>\n\n<i>Родители, пожалуйста, подтвердите выдачу в админ-панели!</i>`,
+          `🎉 <b>Новая покупка в Маркете!</b>\nПокупатель: ${currentUser.name} ${currentUser.avatar}\nПриз: <b>${item.title}</b>\nСписано: 🪙 <b>${finalPrice} монет</b>\n\n<i>Родители, пожалуйста, подтвердите выдачу в админ-панели!</i>`,
           settings.telegramChatId
         );
       }
 
-      showAlert("Поздравляем! 🎉", `Успешно куплено! 🎉 С вашего счета списано ${item.points} монет. Обратитесь к родителям, чтобы забрать приз!`);
+      showAlert("Поздравляем! 🎉", `Успешно куплено! 🎉 С вашего счета списано ${finalPrice} монет. Обратитесь к родителям, чтобы забрать приз!`);
       setConfirmPurchaseItem(null);
     } catch (err) {
       console.error("Failed to purchase item:", err);
@@ -592,11 +686,8 @@ export default function KidDashboard({
         <div className="bg-gradient-to-br from-amber-400 via-yellow-500 to-orange-500 text-white rounded-3xl p-4 flex flex-col justify-between shadow-md relative overflow-hidden group">
           <div className="absolute -bottom-6 -right-6 text-7xl select-none opacity-15 group-hover:scale-110 transition-transform">🪙</div>
           <div>
-            <div className="text-[9px] font-black text-amber-100 uppercase tracking-wider">Семейный Банк</div>
-            <div className="text-xl md:text-2xl font-black mt-0.5 tracking-tight">🪙 99,999,999.99</div>
-          </div>
-          <div className="text-[10px] text-amber-50 font-bold mt-2 pt-1 border-t border-white/20">
-            Мои монеты: {currentUser.points} 🪙
+            <div className="text-[9px] font-black text-amber-100 uppercase tracking-wider">Мой баланс</div>
+            <div className="text-xl md:text-3xl font-black mt-0.5 tracking-tight">🪙 {currentUser.points}</div>
           </div>
         </div>
 
@@ -674,17 +765,6 @@ export default function KidDashboard({
           {canClaimDaily && (
             <span className="absolute -top-1.5 -right-1.5 bg-rose-500 text-white text-[9px] font-black w-3.5 h-3.5 rounded-full flex items-center justify-center animate-ping"></span>
           )}
-        </button>
-        <button
-          onClick={() => setActiveTab("profile")}
-          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-            activeTab === "profile"
-              ? `${palette.bg} text-white shadow`
-              : "text-slate-600 hover:text-slate-900"
-          }`}
-        >
-          <User className="w-4 h-4" />
-          Мой Профиль
         </button>
       </div>
 
@@ -947,6 +1027,11 @@ export default function KidDashboard({
                         ) : (
                           item.image
                         )}
+                        {item.discountPercentage && item.discountUntil && (new Date(item.discountUntil?.toDate ? item.discountUntil.toDate() : item.discountUntil).getTime() > Date.now()) && (
+                          <div className="absolute top-2 right-2 bg-rose-500 text-white font-black text-[10px] px-2 py-1 rounded-lg animate-pulse shadow-md border border-rose-400">
+                            -{item.discountPercentage}% СКИДКА!
+                          </div>
+                        )}
                       </div>
 
                       <div className="space-y-0.5">
@@ -958,13 +1043,24 @@ export default function KidDashboard({
                     <div className="border-t border-slate-100 pt-2 sm:pt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-1 sm:gap-2">
                       <div>
                         <div className="text-[8px] sm:text-[9px] font-bold text-slate-400 uppercase">Стоимость</div>
-                        <div className="font-black text-amber-600 text-xs sm:text-sm">🪙 {item.points} монет</div>
+                        {item.discountPercentage && item.discountUntil && (new Date(item.discountUntil?.toDate ? item.discountUntil.toDate() : item.discountUntil).getTime() > Date.now()) ? (
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-black text-rose-600 text-xs sm:text-sm">🪙 {Math.max(1, Math.floor(item.points * (1 - item.discountPercentage / 100)))}</span>
+                            <span className="font-bold text-slate-400 text-[9px] sm:text-[10px] line-through">🪙 {item.points}</span>
+                          </div>
+                        ) : (
+                          <div className="font-black text-amber-600 text-xs sm:text-sm">🪙 {item.points} монет</div>
+                        )}
                       </div>
                       
                       <button
                         onClick={() => setConfirmPurchaseItem(item)}
                         className={`w-full sm:w-auto py-1.5 sm:py-2 px-2.5 sm:px-4 text-[10px] sm:text-xs font-black rounded-lg sm:rounded-xl transition-all shadow-2xs flex items-center justify-center gap-1 cursor-pointer ${
-                          cannotAfford 
+                          (() => {
+                            const isDiscounted = item.discountPercentage && item.discountUntil && (new Date(item.discountUntil?.toDate ? item.discountUntil.toDate() : item.discountUntil).getTime() > Date.now());
+                            const finalPrice = isDiscounted ? Math.max(1, Math.floor(item.points * (1 - item.discountPercentage! / 100))) : item.points;
+                            return currentUser.points < finalPrice;
+                          })() 
                             ? "bg-slate-100 text-slate-400 border border-slate-200/50" 
                             : `${palette.bg} ${palette.hover} text-white`
                         }`}
@@ -1255,6 +1351,46 @@ export default function KidDashboard({
               </div>
             </div>
 
+            {/* Transfer Coins Section */}
+            {kids.length > 0 && (
+              <div className="bg-indigo-50/50 border border-indigo-100 rounded-3xl p-5 space-y-3 shadow-xs mt-4">
+                <h4 className="text-xs font-black text-indigo-700 uppercase tracking-wider flex items-center gap-1.5">
+                  <Send className="w-3.5 h-3.5" /> Перевести монеты
+                </h4>
+                <p className="text-[11px] text-slate-500 leading-normal">
+                  Вы можете перевести свои монеты брату или сестре. Максимум 100 монет в день.
+                </p>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <select
+                    value={transferTargetId}
+                    onChange={(e) => setTransferTargetId(e.target.value)}
+                    className="flex-1 p-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  >
+                    <option value="">Выберите кому...</option>
+                    {kids.map(k => (
+                      <option key={k.id} value={k.id}>{k.avatar} {k.name}</option>
+                    ))}
+                  </select>
+                  <input
+                    type="number"
+                    min="1"
+                    max="100"
+                    value={transferAmount}
+                    onChange={(e) => setTransferAmount(e.target.value)}
+                    placeholder="Сумма (макс 100)"
+                    className="flex-1 p-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                  <button
+                    onClick={handleTransferCoins}
+                    disabled={loadingTransfer || !transferTargetId || !transferAmount || Number(transferAmount) <= 0}
+                    className={`px-4 py-2.5 ${palette.bg} ${palette.hover} text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer shrink-0 disabled:opacity-50 disabled:cursor-not-allowed`}
+                  >
+                    {loadingTransfer ? "..." : "Перевести 💸"}
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Quests & Purchase history lists */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
               {/* Done Quests List */}
@@ -1438,23 +1574,19 @@ export default function KidDashboard({
                       <span className="text-xs font-bold text-slate-600 group-hover:text-indigo-600">Открыть камеру</span>
                     </button>
 
-                    <button
-                      onClick={() => fileInputRef.current?.click()}
-                      className="p-6 border-2 border-dashed border-slate-300 hover:border-indigo-400 rounded-3xl flex flex-col items-center justify-center gap-2 hover:bg-slate-50/50 transition-all group cursor-pointer"
-                    >
+                    <label className="p-6 border-2 border-dashed border-slate-300 hover:border-indigo-400 rounded-3xl flex flex-col items-center justify-center gap-2 hover:bg-slate-50/50 transition-all group cursor-pointer">
                       <ImageIcon className="w-8 h-8 text-slate-400 group-hover:text-indigo-500" />
                       <span className="text-xs font-bold text-slate-600 group-hover:text-indigo-600">Выбрать файл</span>
-                    </button>
+                      <input 
+                        type="file" 
+                        ref={fileInputRef} 
+                        accept="image/*" 
+                        onChange={handleFileSelect} 
+                        className="hidden" 
+                      />
+                    </label>
                   </div>
                 )}
-
-                <input 
-                  type="file" 
-                  ref={fileInputRef} 
-                  accept="image/*" 
-                  onChange={handleFileSelect} 
-                  className="hidden" 
-                />
                 
                 <canvas ref={canvasRef} className="hidden"></canvas>
               </div>

@@ -353,7 +353,15 @@ export default function App() {
             )}
 
             {/* Active User badge */}
-            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200/60 p-1.5 pr-3 rounded-full shadow-inner">
+            <div 
+              onClick={() => {
+                if (currentUser.role === "kid") {
+                  setCurrentView("dashboard");
+                  setKidActiveTab("profile");
+                }
+              }}
+              className={`flex items-center gap-2 bg-slate-50 border border-slate-200/60 p-1.5 pr-3 rounded-full shadow-inner ${currentUser.role === 'kid' ? 'cursor-pointer hover:bg-slate-100' : ''}`}
+            >
               <span className="text-2xl bg-white p-1 rounded-full border border-slate-100 shadow-xs h-9 w-9 flex items-center justify-center">
                 {currentUser.avatar}
               </span>
@@ -413,6 +421,7 @@ export default function App() {
             {currentUser.role === "kid" ? (
               <KidDashboard
                 currentUser={currentUser}
+                kids={users.filter(u => u.role === "kid" && u.id !== currentUser.id)}
                 chores={chores}
                 marketItems={marketItems}
                 purchases={purchases}

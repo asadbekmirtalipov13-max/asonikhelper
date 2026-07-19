@@ -1,16 +1,17 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { Chore, FamilyUser, MarketItem, Purchase, SiteSettings, Transaction } from "../types";
 import { db } from "../firebase";
 import { collection, addDoc, updateDoc, doc, setDoc, deleteDoc } from "firebase/firestore";
 import { 
   Sparkles, Plus, Check, Clock, Eye, AlertCircle, Trash2, 
   Tag, ShoppingBag, Award, Camera, CornerDownRight, ThumbsUp, ThumbsDown, RefreshCw,
-  Pencil, X, Pin, EyeOff, ArrowUp, ArrowDown
+  Pencil, X, Pin, EyeOff, ArrowUp, ArrowDown, BarChart2
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { DEFAULT_CHORE_PRESETS, TAILWIND_COLOR_PALETTES, DEFAULT_CATEGORIES } from "../presets";
 import { sendTelegramNotification } from "../utils/telegram";
 import { uploadImageToImgbb, compressImageFile } from "../utils/upload";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from "recharts";
 
 interface ParentDashboardProps {
   currentUser: FamilyUser;
@@ -58,6 +59,7 @@ export default function ParentDashboard({
   const [itemCost, setItemCost] = useState(20);
   const [itemImage, setItemImage] = useState("🎁"); // emoji or url
   const [itemStock, setItemStock] = useState<number>(5);
+  const [itemDiscount, setItemDiscount] = useState("");
 
   const [uploadingImage, setUploadingImage] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -94,6 +96,7 @@ export default function ParentDashboard({
   const [editItemCost, setEditItemCost] = useState(20);
   const [editItemImage, setEditItemImage] = useState("🎁");
   const [editItemStock, setEditItemStock] = useState(5);
+  const [editItemDiscount, setEditItemDiscount] = useState("");
   const [editUploadingImage, setEditUploadingImage] = useState(false);
   const editFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -118,6 +121,7 @@ export default function ParentDashboard({
     setEditItemCategory(item.category || "");
     setEditItemPinned(!!item.pinned);
     setEditItemHidden(!!item.hidden);
+    setEditItemDiscount(item.discountPercentage?.toString() || "");
   };
 
   const cancelEditingItem = () => {
@@ -130,6 +134,17 @@ export default function ParentDashboard({
     try {
       const cats = settings.categories || DEFAULT_CATEGORIES;
       const finalCat = editItemCategory || cats[0];
+      
+      const discountNumber = Number(editItemDiscount);
+      let discountPercentage = null;
+      let discountUntil = null;
+      if (!isNaN(discountNumber) && discountNumber > 0 && discountNumber < 100) {
+        discountPercentage = discountNumber;
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        discountUntil = tomorrow;
+      }
+      
       await updateDoc(doc(db, "marketplace", id), {
         title: editItemName.trim(),
         description: editItemDesc.trim(),
@@ -138,7 +153,9 @@ export default function ParentDashboard({
         image: editItemImage,
         category: finalCat,
         pinned: editItemPinned,
-        hidden: editItemHidden
+        hidden: editItemHidden,
+        discountPercentage,
+        discountUntil
       });
       setEditingItemId(null);
       showAlert("Успешно 🎉", "Товар в магазине успешно обновлен!");
@@ -424,6 +441,16 @@ export default function ParentDashboard({
       const itemId = "item-" + Math.random().toString(36).substr(2, 9);
       
       const maxSortOrder = marketItems.reduce((max, item) => Math.max(max, item.sortOrder || 0), 0);
+      
+      const discountNumber = Number(itemDiscount);
+      let discountPercentage = undefined;
+      let discountUntil = undefined;
+      if (!isNaN(discountNumber) && discountNumber > 0 && discountNumber < 100) {
+        discountPercentage = discountNumber;
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        discountUntil = tomorrow;
+      }
 
       const newItem: MarketItem = {
         id: itemId,
@@ -437,7 +464,9 @@ export default function ParentDashboard({
         category: finalCat,
         pinned: itemPinned,
         hidden: itemHidden,
-        sortOrder: maxSortOrder + 1
+        sortOrder: maxSortOrder + 1,
+        discountPercentage,
+        discountUntil
       };
 
       await setDoc(doc(db, "marketplace", itemId), newItem);
@@ -446,6 +475,7 @@ export default function ParentDashboard({
       setItemDesc("");
       setItemCost(20);
       setItemStock(5);
+      setItemDiscount("");
       setItemImage("🎁");
       setItemCategory("");
       setItemPinned(false);
@@ -554,6 +584,42 @@ export default function ParentDashboard({
     }
   };
 
+  const activityChartData = useMemo(() => {
+    // Generate last 7 days labels (MM/DD)
+    const data = [];
+    const today = new Date();
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      const dateStr = d.toISOString().split('T')[0];
+      const displayDate = `${d.getDate().toString().padStart(2, '0')}.${(d.getMonth() + 1).toString().padStart(2, '0')}`;
+      
+      const dayData: any = { name: displayDate, date: dateStr };
+      kids.forEach(k => {
+        dayData[k.name] = 0;
+      });
+      data.push(dayData);
+    }
+
+    // Populate data with approved chores
+    chores.forEach(chore => {
+      if (chore.status === "approved" && chore.completedAt) {
+        const completedDateObj = chore.completedAt.toDate ? chore.completedAt.toDate() : new Date(chore.completedAt);
+        const choreDateStr = completedDateObj.toISOString().split('T')[0];
+        
+        const dayEntry = data.find(d => d.date === choreDateStr);
+        if (dayEntry) {
+          const kid = kids.find(k => k.id === chore.assignedTo[0]);
+          if (kid) {
+            dayEntry[kid.name] = (dayEntry[kid.name] || 0) + 1;
+          }
+        }
+      }
+    });
+
+    return data;
+  }, [chores, kids]);
+
   return (
     <div className="space-y-6">
       {/* Premium Family Stats Bar */}
@@ -602,6 +668,37 @@ export default function ParentDashboard({
           </div>
         </div>
       </div>
+
+      {/* Activity Graph */}
+      {kids.length > 0 && (
+        <div className="bg-white border border-slate-100 rounded-3xl p-5 shadow-sm">
+          <div className="flex items-center gap-2 mb-4">
+            <BarChart2 className="w-5 h-5 text-indigo-500" />
+            <h3 className="font-bold text-slate-800 text-sm">Активность детей (выполнено заданий за 7 дней)</h3>
+          </div>
+          <div className="h-64 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={activityChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8' }} />
+                <YAxis allowDecimals={false} axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8' }} />
+                <Tooltip 
+                  cursor={{ fill: '#f8fafc' }} 
+                  contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                  labelStyle={{ fontWeight: 'bold', color: '#334155', marginBottom: '4px' }}
+                />
+                <Legend wrapperStyle={{ fontSize: '11px', fontWeight: 'bold' }} />
+                {kids.map((kid, index) => {
+                  const colors = ['#818cf8', '#fbbf24', '#34d399', '#f472b6', '#38bdf8'];
+                  return (
+                    <Bar key={kid.id} dataKey={kid.name} fill={colors[index % colors.length]} radius={[4, 4, 0, 0]} />
+                  );
+                })}
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
 
       {/* Dashboard Submenu */}
       <div className="flex gap-2 bg-slate-100 p-1.5 rounded-2xl w-fit">
@@ -666,7 +763,7 @@ export default function ParentDashboard({
                     onClick={() => handleApplyPreset(preset)}
                     className="py-1 px-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-xl text-[10px] font-semibold transition-all cursor-pointer"
                   >
-                    {preset.title.split(" ")[0]}..
+                    {preset.title}
                   </button>
                 ))}
               </div>
@@ -734,7 +831,26 @@ export default function ParentDashboard({
               </div>
 
               <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase">Кому поручить задание?</label>
+                <div className="flex justify-between items-center mb-1.5">
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase">Кому поручить задание?</label>
+                  {kids.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (selectedKids.length === kids.length) {
+                          setSelectedKids([]);
+                        } else {
+                          setSelectedKids(kids.map(k => k.id));
+                        }
+                      }}
+                      className={`text-[9px] font-bold uppercase transition-colors cursor-pointer ${
+                        selectedKids.length === kids.length ? "text-rose-500 hover:text-rose-600" : "text-indigo-500 hover:text-indigo-600"
+                      }`}
+                    >
+                      {selectedKids.length === kids.length ? "Снять выбор" : "Выбрать всех"}
+                    </button>
+                  )}
+                </div>
                 {kids.length === 0 ? (
                   <p className="text-[10px] text-rose-500 font-bold mt-1">Добавьте детей в панели настроек!</p>
                 ) : (
@@ -1002,6 +1118,19 @@ export default function ParentDashboard({
               </div>
 
               <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase text-rose-500">Скидка по акции % (1-99)</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={99}
+                  value={itemDiscount}
+                  onChange={(e) => setItemDiscount(e.target.value)}
+                  placeholder="Например: 10 (пусто - без скидки)"
+                  className="w-full mt-1 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-600 focus:outline-none focus:ring-1 focus:ring-rose-500 placeholder-rose-300"
+                />
+              </div>
+
+              <div>
                 <label className="block text-[10px] font-bold text-slate-400 uppercase">Иконка / Изображение</label>
                 <div className="grid grid-cols-6 gap-1 bg-white p-2 rounded-xl border border-slate-200 mt-1">
                   {["🎁", "🖥️", "🍕", "🎮", "🍭", "🧸", "📚", "🎬", "🥤", "🛹", "⚽", "🚗"].map((em) => (
@@ -1038,21 +1167,17 @@ export default function ParentDashboard({
                       </button>
                     </div>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="w-full py-2 bg-slate-50 border border-dashed border-slate-300 hover:border-indigo-400 text-slate-500 hover:text-indigo-600 rounded-lg text-[10px] font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                    >
+                    <label className="w-full py-2 bg-slate-50 border border-dashed border-slate-300 hover:border-indigo-400 text-slate-500 hover:text-indigo-600 rounded-lg text-[10px] font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer">
                       📁 Загрузить свою картинку (с устройства)
-                    </button>
+                      <input
+                        type="file"
+                        ref={fileInputRef}
+                        accept="image/*"
+                        onChange={handleFileSelectImage}
+                        className="hidden"
+                      />
+                    </label>
                   )}
-                  <input
-                    type="file"
-                    ref={fileInputRef}
-                    accept="image/*"
-                    onChange={handleFileSelectImage}
-                    className="hidden"
-                  />
                 </div>
 
                 <input
@@ -1213,6 +1338,19 @@ export default function ParentDashboard({
                                 />
                               </div>
                             </div>
+                            
+                            <div>
+                              <label className="block text-[9px] font-bold text-slate-400 uppercase text-rose-500">Скидка по акции % (1-99)</label>
+                              <input
+                                type="number"
+                                min={0}
+                                max={99}
+                                value={editItemDiscount}
+                                onChange={(e) => setEditItemDiscount(e.target.value)}
+                                placeholder="Например: 10 (пусто - без скидки)"
+                                className="w-full mt-0.5 p-1.5 bg-rose-50 border border-rose-200 rounded-lg text-xs font-bold text-rose-600 focus:outline-none focus:ring-1 focus:ring-rose-500 placeholder-rose-300"
+                              />
+                            </div>
 
                             <div>
                               <label className="block text-[9px] font-bold text-slate-400 uppercase">Изображение / Иконка</label>
@@ -1237,20 +1375,16 @@ export default function ParentDashboard({
                                       {em}
                                     </button>
                                   ))}
-                                  <button
-                                    type="button"
-                                    onClick={() => editFileInputRef.current?.click()}
-                                    className="text-[9px] font-black text-indigo-600 hover:underline px-1.5 py-1 bg-indigo-50 rounded cursor-pointer"
-                                  >
+                                  <label className="text-[9px] font-black text-indigo-600 hover:underline px-1.5 py-1 bg-indigo-50 rounded cursor-pointer flex items-center justify-center">
                                     {editUploadingImage ? "Загрузка..." : "Своё фото"}
-                                  </button>
-                                  <input
-                                    type="file"
-                                    ref={editFileInputRef}
-                                    accept="image/*"
-                                    onChange={handleEditFileSelectImage}
-                                    className="hidden"
-                                  />
+                                    <input
+                                      type="file"
+                                      ref={editFileInputRef}
+                                      accept="image/*"
+                                      onChange={handleEditFileSelectImage}
+                                      className="hidden"
+                                    />
+                                  </label>
                                 </div>
                               </div>
                             </div>
@@ -1374,11 +1508,16 @@ export default function ParentDashboard({
                         </div>
 
                         <div className="flex gap-3 w-full pt-1">
-                          <div className="w-16 h-16 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center text-3xl shrink-0 overflow-hidden">
+                          <div className="w-16 h-16 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center text-3xl shrink-0 overflow-hidden relative">
                             {item.image.startsWith("http") ? (
                               <img src={item.image} alt={item.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                             ) : (
                               item.image
+                            )}
+                            {item.discountPercentage && item.discountUntil && (new Date(item.discountUntil?.toDate ? item.discountUntil.toDate() : item.discountUntil).getTime() > Date.now()) && (
+                              <div className="absolute top-1 right-1 bg-rose-500 text-white font-black text-[8px] px-1 py-0.5 rounded shadow-sm border border-rose-400 leading-none">
+                                -{item.discountPercentage}%
+                              </div>
                             )}
                           </div>
 
