@@ -1,17 +1,18 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { FamilyUser, SiteSettings } from "../types";
 import { db } from "../firebase";
-import { doc, setDoc, updateDoc, deleteDoc, collection } from "firebase/firestore";
+import { doc, setDoc, updateDoc, deleteDoc, collection, getDocs, writeBatch } from "firebase/firestore";
 import { 
   Users, Bot, Palette, Plus, Trash2, RefreshCw, 
-  Check, Save, ArrowRight, UserPlus, Settings2, Info, Compass, Pencil
+  Check, Save, ArrowRight, UserPlus, Settings2, Info, Compass, Pencil, Image, Upload, Tag, X
 } from "lucide-react";
 import { motion } from "motion/react";
 import { 
   generateRandomNickname, getRandomAvatar, PRESET_AVATARS, 
-  TAILWIND_COLOR_PALETTES 
+  TAILWIND_COLOR_PALETTES, DEFAULT_CATEGORIES
 } from "../presets";
 import { fetchBotInfo, fetchTelegramUpdates, TelegramUpdateChat, sendTelegramNotification } from "../utils/telegram";
+import { uploadImageToImgbb } from "../utils/upload";
 
 interface AdminPanelProps {
   currentUser: any;
@@ -24,7 +25,7 @@ interface AdminPanelProps {
 }
 
 export default function AdminPanel({ currentUser, users, settings, onUpdateSettings, primaryColor, showAlert, showConfirm }: AdminPanelProps) {
-  const [activeTab, setActiveTab] = useState<"users" | "telegram" | "branding">("users");
+  const [activeTab, setActiveTab] = useState<"users" | "telegram" | "branding" | "system">("users");
   const [loading, setLoading] = useState(false);
   
   // Create user form state
@@ -38,12 +39,17 @@ export default function AdminPanel({ currentUser, users, settings, onUpdateSetti
   const [editUserName, setEditUserName] = useState("");
   const [editUserEmail, setEditUserEmail] = useState("");
   const [editUserAvatar, setEditUserAvatar] = useState("");
+  const [editUserTelegram, setEditUserTelegram] = useState("");
 
   // Telegram helper state
   const [telegramLogs, setTelegramLogs] = useState<TelegramUpdateChat[]>([]);
   const [botUsername, setBotUsername] = useState("");
   const [customChatId, setCustomChatId] = useState(settings.telegramChatId || "");
   const [testStatus, setTestStatus] = useState<"idle" | "sending" | "success" | "error">("idle");
+  const [logoUploading, setLogoUploading] = useState(false);
+  const logoInputRef = useRef<HTMLInputElement>(null);
+  const [chestUploading, setChestUploading] = useState(false);
+  const chestInputRef = useRef<HTMLInputElement>(null);
 
   const isPrimaryAdmin = currentUser.email?.toLowerCase() === "asadbekmirtalipov13@gmail.com";
   const palette = TAILWIND_COLOR_PALETTES[primaryColor] || TAILWIND_COLOR_PALETTES.indigo;
@@ -121,6 +127,7 @@ export default function AdminPanel({ currentUser, users, settings, onUpdateSetti
     setEditUserName(user.name);
     setEditUserEmail(user.email && !user.email.endsWith("@family.local") ? user.email : "");
     setEditUserAvatar(user.avatar);
+    setEditUserTelegram(user.telegramChatId || "");
   };
 
   const handleSaveEditUser = async (e: React.FormEvent) => {
@@ -135,7 +142,8 @@ export default function AdminPanel({ currentUser, users, settings, onUpdateSetti
       await updateDoc(userRef, {
         name: editUserName.trim(),
         avatar: editUserAvatar,
-        email: emailValue
+        email: emailValue,
+        telegramChatId: editUserTelegram.trim()
       });
 
       showAlert("Успешно", "Профиль успешно сохранен!");
@@ -181,6 +189,136 @@ export default function AdminPanel({ currentUser, users, settings, onUpdateSetti
     }
   };
 
+  const handleSetExactPoints = async (id: string, amount: number) => {
+    try {
+      const userRef = doc(db, "users", id);
+      const targetPoints = Math.max(0, amount);
+      await updateDoc(userRef, { points: targetPoints });
+    } catch (err) {
+      console.error("Failed to set exact points:", err);
+    }
+  };
+
+  const handleResetAllBalancesAndStreaks = async () => {
+    showConfirm(
+      "Сбросить серии и балансы",
+      "Вы действительно хотите обнулить баланс монет и сбросить серии ежедневных отметок у ВСЕХ детей? Это действие необратимо.",
+      async () => {
+        setLoading(true);
+        try {
+          const batch = writeBatch(db);
+          const kids = users.filter(u => u.role === "kid");
+          for (const kid of kids) {
+            const userRef = doc(db, "users", kid.id);
+            batch.update(userRef, {
+              points: 0,
+              dailyStreak: 0,
+              lastCheckIn: "",
+              restoresUsedThisMonth: 0,
+              lastRestoreMonth: ""
+            });
+          }
+          await batch.commit();
+          showAlert("Успешно", "Все балансы монет и серии ежедневных отметок у детей успешно сброшены! 🎉");
+        } catch (err) {
+          console.error("Failed to reset balances:", err);
+          showAlert("Ошибка", "Не удалось сбросить балансы: " + err);
+        } finally {
+          setLoading(false);
+        }
+      }
+    );
+  };
+
+  const handleClearOldChores = async () => {
+    showConfirm(
+      "Очистить старые задания",
+      "Вы действительно хотите навсегда удалить все архивные и завершенные задания (выполненные и отмененные)? Это очистит списки и устранит возможные зависания.",
+      async () => {
+        setLoading(true);
+        try {
+          const choresSnap = await getDocs(collection(db, "chores"));
+          const batch = writeBatch(db);
+          let count = 0;
+          choresSnap.forEach(docSnap => {
+            const data = docSnap.data();
+            if (data.status === "approved" || data.status === "declined") {
+              batch.delete(docSnap.ref);
+              count++;
+            }
+          });
+          if (count > 0) {
+            await batch.commit();
+            showAlert("Успешно 🎉", `Удалено ${count} архивных заданий!`);
+          } else {
+            showAlert("Инфо", "Архивных заданий для удаления не найдено.");
+          }
+        } catch (err) {
+          console.error("Failed to clear old chores:", err);
+          showAlert("Ошибка", "Не удалось очистить задания: " + err);
+        } finally {
+          setLoading(false);
+        }
+      }
+    );
+  };
+
+  const handleClearAllSystemData = async () => {
+    showConfirm(
+      "ПОЛНАЯ ОЧИСТКА ВСЕХ ДАННЫХ",
+      "ВНИМАНИЕ! Это действие полностью удалит ВСЕ задания (квесты), товары в маркете, историю покупок и обнулит всех пользователей (кроме текущего). Вы действительно хотите начать все с чистого листа?",
+      async () => {
+        setLoading(true);
+        try {
+          const batch = writeBatch(db);
+
+          // 1. Delete all chores
+          const choresSnap = await getDocs(collection(db, "chores"));
+          choresSnap.forEach(docSnap => {
+            batch.delete(docSnap.ref);
+          });
+
+          // 2. Delete all marketplace items
+          const marketSnap = await getDocs(collection(db, "marketplace"));
+          marketSnap.forEach(docSnap => {
+            batch.delete(docSnap.ref);
+          });
+
+          // 3. Delete all purchase records
+          const purchasesSnap = await getDocs(collection(db, "purchases"));
+          purchasesSnap.forEach(docSnap => {
+            batch.delete(docSnap.ref);
+          });
+
+          // 4. Reset or delete users (keep the current admin/parent user, clear points and streaks of any other kids/parents)
+          for (const u of users) {
+            if (u.id === currentUser.id) {
+              continue;
+            }
+            if (u.role === "kid") {
+              const uRef = doc(db, "users", u.id);
+              batch.update(uRef, {
+                points: 0,
+                dailyStreak: 0,
+                lastCheckIn: "",
+                restoresUsedThisMonth: 0,
+                lastRestoreMonth: ""
+              });
+            }
+          }
+
+          await batch.commit();
+          showAlert("Успешно 🎉", "Все системные данные были полностью очищены и сброшены!");
+        } catch (err) {
+          console.error("Failed to clear system data:", err);
+          showAlert("Ошибка", "Не удалось очистить данные: " + err);
+        } finally {
+          setLoading(false);
+        }
+      }
+    );
+  };
+
   const handleSaveTelegramConfig = async () => {
     try {
       setLoading(true);
@@ -191,6 +329,36 @@ export default function AdminPanel({ currentUser, users, settings, onUpdateSetti
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleAddCategory = async (cat: string) => {
+    const trimmed = cat.trim();
+    if (!trimmed) return;
+    const currentCats = settings.categories || DEFAULT_CATEGORIES;
+    if (currentCats.includes(trimmed)) {
+      showAlert("Внимание", "Такая категория уже существует!");
+      return;
+    }
+    const updated = [...currentCats, trimmed];
+    await onUpdateSettings({ categories: updated });
+    showAlert("Успешно", `Категория "${trimmed}" успешно добавлена! 🎉`);
+  };
+
+  const handleRemoveCategory = async (cat: string) => {
+    const currentCats = settings.categories || DEFAULT_CATEGORIES;
+    const updated = currentCats.filter(c => c !== cat);
+    if (updated.length === 0) {
+      showAlert("Ошибка", "Должна остаться хотя бы одна категория!");
+      return;
+    }
+    showConfirm(
+      "Удалить категорию",
+      `Вы действительно хотите удалить категорию "${cat}"? Товары с этой категорией сохранятся, но категория перестанет отображаться в поиске.`,
+      async () => {
+        await onUpdateSettings({ categories: updated });
+        showAlert("Успешно", "Категория удалена.");
+      }
+    );
   };
 
   const handleTestTelegram = async () => {
@@ -216,6 +384,68 @@ export default function AdminPanel({ currentUser, users, settings, onUpdateSetti
     await onUpdateSettings({ title, logo });
   };
 
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 5 * 1024 * 1024) {
+      showAlert("Ошибка", "Изображение слишком большое! Максимальный размер 5МБ.");
+      return;
+    }
+
+    setLogoUploading(true);
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      try {
+        const base64Str = reader.result as string;
+        const uploadedUrl = await uploadImageToImgbb(base64Str);
+        if (uploadedUrl) {
+          await onUpdateSettings({ logo: uploadedUrl });
+          showAlert("Успешно", "Логотип сайта успешно обновлен! 🎉");
+        } else {
+          showAlert("Ошибка", "Не удалось загрузить изображение. Пожалуйста, попробуйте еще раз.");
+        }
+      } catch (err) {
+        console.error("Failed to upload logo:", err);
+        showAlert("Ошибка", "Произошла ошибка при загрузке картинки.");
+      } finally {
+        setLogoUploading(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleChestUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 5 * 1024 * 1024) {
+      showAlert("Ошибка", "Изображение слишком большое! Максимальный размер 5МБ.");
+      return;
+    }
+
+    setChestUploading(true);
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      try {
+        const base64Str = reader.result as string;
+        const uploadedUrl = await uploadImageToImgbb(base64Str);
+        if (uploadedUrl) {
+          await onUpdateSettings({ chestImageUrl: uploadedUrl });
+          showAlert("Успешно", "Изображение сундука успешно обновлено! 🎉");
+        } else {
+          showAlert("Ошибка", "Не удалось загрузить изображение. Пожалуйста, попробуйте еще раз.");
+        }
+      } catch (err) {
+        console.error("Failed to upload chest image:", err);
+        showAlert("Ошибка", "Произошла ошибка при загрузке картинки.");
+      } finally {
+        setChestUploading(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
   const kidsList = users.filter(u => u.role === "kid");
   const parentsList = users.filter(u => u.role === "parent" || u.role === "admin");
 
@@ -235,6 +465,39 @@ export default function AdminPanel({ currentUser, users, settings, onUpdateSetti
         <div className="text-xs bg-slate-100 font-bold px-3 py-1.5 rounded-full text-slate-600 flex items-center gap-1.5">
           <span className="h-2 w-2 rounded-full bg-indigo-500 animate-pulse"></span>
           {currentUser.name}
+        </div>
+      </div>
+
+      {/* Premium Family Stats Bar */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* Treasury */}
+        <div className="bg-gradient-to-br from-amber-400 via-yellow-500 to-orange-500 text-white rounded-3xl p-4 shadow-sm relative overflow-hidden group">
+          <div className="absolute -bottom-6 -right-6 text-7xl select-none opacity-15 group-hover:scale-110 transition-transform">🪙</div>
+          <div>
+            <div className="text-[9px] font-black text-amber-100 uppercase tracking-wider">Семейный Банк (Баланс)</div>
+            <div className="text-xl font-black mt-1">🪙 99,999,999.99</div>
+            <p className="text-[10px] text-amber-50/80 font-bold mt-1">Свободный баланс взрослых</p>
+          </div>
+        </div>
+
+        {/* Kids card */}
+        <div className="bg-orange-50 border border-orange-100 rounded-3xl p-4 flex items-center justify-between shadow-xs relative overflow-hidden group">
+          <div className="absolute -bottom-6 -right-6 text-7xl select-none opacity-10 group-hover:scale-110 transition-transform">🧸</div>
+          <div>
+            <div className="text-[9px] font-black text-orange-800 uppercase tracking-wider">Дети в системе</div>
+            <div className="text-xl font-black text-orange-700 mt-1">{kidsList.length} чел.</div>
+            <p className="text-[10px] text-orange-500 font-bold mt-1">Зарегистрировано</p>
+          </div>
+        </div>
+
+        {/* Parents card */}
+        <div className="bg-indigo-50 border border-indigo-100 rounded-3xl p-4 flex items-center justify-between shadow-xs relative overflow-hidden group">
+          <div className="absolute -bottom-6 -right-6 text-7xl select-none opacity-10 group-hover:scale-110 transition-transform">👩</div>
+          <div>
+            <div className="text-[9px] font-black text-indigo-800 uppercase tracking-wider">Родители и Админы</div>
+            <div className="text-xl font-black text-indigo-700 mt-1">{parentsList.length} чел.</div>
+            <p className="text-[10px] text-indigo-500 font-bold mt-1">Доступ к управлению</p>
+          </div>
         </div>
       </div>
 
@@ -277,6 +540,30 @@ export default function AdminPanel({ currentUser, users, settings, onUpdateSetti
             Брендинг и Стиль
           </button>
         )}
+
+        <button
+          onClick={() => setActiveTab("system")}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+            activeTab === "system"
+              ? `${palette.bg} text-white shadow-sm`
+              : "text-slate-500 hover:text-slate-700 hover:bg-slate-50"
+          }`}
+        >
+          <Settings2 className="w-3.5 h-3.5" />
+          Сброс и Очистка
+        </button>
+
+        <button
+          onClick={() => setActiveTab("categories")}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+            activeTab === "categories"
+              ? `${palette.bg} text-white shadow-sm`
+              : "text-slate-500 hover:text-slate-700 hover:bg-slate-50"
+          }`}
+        >
+          <Tag className="w-3.5 h-3.5" />
+          Категории
+        </button>
       </div>
 
       {/* USER MANAGEMENT TAB */}
@@ -418,11 +705,16 @@ export default function AdminPanel({ currentUser, users, settings, onUpdateSetti
                             📧 {kid.email}
                           </div>
                         )}
+                        {kid.telegramChatId && (
+                          <div className="text-[9px] text-emerald-600 font-bold mt-0.5 flex items-center gap-1">
+                            💬 Telegram ID: {kid.telegramChatId}
+                          </div>
+                        )}
                       </div>
                     </div>
 
                     <div className="flex flex-col items-end gap-1.5">
-                      <div className="flex gap-1">
+                      <div className="flex gap-1 items-center">
                         <button
                           onClick={() => handleUpdatePoints(kid.id, 5)}
                           className="px-2 py-1 bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 rounded-lg text-[10px] font-bold transition-all cursor-pointer"
@@ -437,6 +729,30 @@ export default function AdminPanel({ currentUser, users, settings, onUpdateSetti
                         >
                           -5
                         </button>
+
+                        <div className="flex items-center gap-1 border border-slate-200 rounded-lg p-0.5 bg-slate-50">
+                          <input
+                            type="number"
+                            defaultValue={kid.points}
+                            onBlur={async (e) => {
+                              const val = parseInt(e.target.value);
+                              if (!isNaN(val)) {
+                                await handleSetExactPoints(kid.id, val);
+                              }
+                            }}
+                            onKeyDown={async (e) => {
+                              if (e.key === "Enter") {
+                                const val = parseInt((e.target as HTMLInputElement).value);
+                                if (!isNaN(val)) {
+                                  await handleSetExactPoints(kid.id, val);
+                                  (e.target as HTMLInputElement).blur();
+                                }
+                              }
+                            }}
+                            className="w-12 text-center bg-white border-0 text-[10px] font-black text-amber-700 focus:ring-1 focus:ring-indigo-500 rounded p-0.5"
+                            title="Точный баланс монет"
+                          />
+                        </div>
                       </div>
                       <button
                         onClick={() => handleDeleteUser(kid.id, kid.name)}
@@ -641,13 +957,138 @@ export default function AdminPanel({ currentUser, users, settings, onUpdateSetti
               </div>
 
               <div>
-                <label className="block text-[10px] text-slate-400 font-bold uppercase">Логотип (Emoji)</label>
-                <input
-                  type="text"
-                  value={settings.logo}
-                  onChange={(e) => handleUpdateSiteTitle(settings.title, e.target.value)}
-                  className="w-20 mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-lg text-center font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                />
+                <label className="block text-[10px] text-slate-400 font-bold uppercase">Логотип сайта (Иконка)</label>
+                
+                <div className="mt-2 flex items-center gap-4">
+                  {/* Logo preview */}
+                  <div className="w-16 h-16 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-center text-3xl overflow-hidden shadow-inner shrink-0">
+                    {settings.logo && (settings.logo.startsWith("http") || settings.logo.startsWith("data:")) ? (
+                      <img 
+                        src={settings.logo} 
+                        alt="Logo" 
+                        className="w-full h-full object-contain"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      settings.logo || "🤝"
+                    )}
+                  </div>
+
+                  <div className="flex-1 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={settings.logo && (settings.logo.startsWith("http") || settings.logo.startsWith("data:")) ? "" : settings.logo}
+                        onChange={(e) => handleUpdateSiteTitle(settings.title, e.target.value)}
+                        placeholder="Emoji"
+                        className="w-20 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-center font-bold text-lg focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                        title="Введите эмодзи-логотип"
+                      />
+                      <input
+                        type="file"
+                        ref={logoInputRef}
+                        onChange={handleLogoUpload}
+                        accept="image/*"
+                        className="hidden"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => logoInputRef.current?.click()}
+                        disabled={logoUploading}
+                        className={`px-3 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 transition-all flex items-center gap-1.5 cursor-pointer shadow-sm ${
+                          logoUploading ? "opacity-50" : ""
+                        }`}
+                      >
+                        <Upload className="w-4 h-4 text-indigo-500" />
+                        {logoUploading ? "Загрузка..." : "Свой логотип (Загрузить)"}
+                      </button>
+                    </div>
+                    {settings.logo && (settings.logo.startsWith("http") || settings.logo.startsWith("data:")) ? (
+                      <button
+                        type="button"
+                        onClick={() => handleUpdateSiteTitle(settings.title, "🏪")}
+                        className="text-[10px] font-bold text-rose-500 hover:underline cursor-pointer block"
+                      >
+                        Сбросить на эмодзи 🏪
+                      </button>
+                    ) : (
+                      <span className="text-[9px] text-slate-400 font-bold block">
+                        * Вы можете ввести эмодзи слева ИЛИ загрузить файл-логотип
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Customizable Chest Image Card */}
+            <div className="space-y-3 bg-white p-6 rounded-3xl border border-slate-200">
+              <h4 className="text-xs font-bold text-slate-500 uppercase flex items-center gap-1">
+                📦 Картинка Сундука для 15 и 30 дня
+              </h4>
+              <p className="text-[11px] text-slate-400 leading-normal">
+                Загрузите красивую картинку сундука или вставьте URL, который будет показываться на 15-й и 30-й день в календаре отметок.
+              </p>
+
+              <div className="flex items-center gap-4 pt-1">
+                <div className="w-16 h-16 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center text-4xl overflow-hidden shadow-inner shrink-0">
+                  {settings.chestImageUrl && (settings.chestImageUrl.startsWith("http") || settings.chestImageUrl.startsWith("data:")) ? (
+                    <img 
+                      src={settings.chestImageUrl} 
+                      alt="Chest" 
+                      className="w-full h-full object-contain"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    "🎁"
+                  )}
+                </div>
+
+                <div className="flex-grow space-y-2">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="file"
+                      ref={chestInputRef}
+                      onChange={handleChestUpload}
+                      accept="image/*"
+                      className="hidden"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => chestInputRef.current?.click()}
+                      disabled={chestUploading}
+                      className={`px-3 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 transition-all flex items-center gap-1.5 cursor-pointer shadow-sm ${
+                        chestUploading ? "opacity-50" : ""
+                      }`}
+                    >
+                      <Upload className="w-4 h-4 text-amber-500" />
+                      {chestUploading ? "Загрузка..." : "Загрузить фото"}
+                    </button>
+
+                    {settings.chestImageUrl && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await onUpdateSettings({ chestImageUrl: "" });
+                          showAlert("Успешно", "Сброшено на эмодзи сундука по умолчанию! 🎁");
+                        }}
+                        className="py-2 px-3 text-rose-500 hover:bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-sm"
+                      >
+                        Сбросить
+                      </button>
+                    )}
+                  </div>
+
+                  <input
+                    type="text"
+                    placeholder="Или вставьте ссылку на картинку (https://...)"
+                    value={settings.chestImageUrl || ""}
+                    onChange={async (e) => {
+                      await onUpdateSettings({ chestImageUrl: e.target.value.trim() });
+                    }}
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-[11px] font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
               </div>
             </div>
 
@@ -717,7 +1158,20 @@ export default function AdminPanel({ currentUser, users, settings, onUpdateSetti
                   value={editUserEmail}
                   onChange={(e) => setEditUserEmail(e.target.value)}
                   placeholder="name@gmail.com"
-                  className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase">
+                  Telegram Chat ID (для личных уведомлений)
+                </label>
+                <input
+                  type="text"
+                  value={editUserTelegram}
+                  onChange={(e) => setEditUserTelegram(e.target.value)}
+                  placeholder="Например: 582910482"
+                  className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono focus:outline-none focus:ring-1 focus:ring-indigo-500 font-bold"
                 />
               </div>
 
@@ -756,6 +1210,152 @@ export default function AdminPanel({ currentUser, users, settings, onUpdateSetti
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* SYSTEM AND RESET TAB */}
+      {activeTab === "system" && (
+        <div className="space-y-6 max-w-2xl">
+          <div className="bg-white border border-rose-100 rounded-3xl p-6 space-y-6">
+            <div>
+              <h3 className="text-base font-black text-rose-700 flex items-center gap-1.5">
+                <Settings2 className="w-4 h-4" />
+                Панель управления системой и сброс данных
+              </h3>
+              <p className="text-slate-400 text-xs mt-1">
+                Здесь вы можете полностью сбросить балансы, стереть историю квестов или очистить всю базу данных для начала нового периода. Будьте аккуратны, все операции необратимы!
+              </p>
+            </div>
+
+            <div className="space-y-4 pt-2">
+              {/* Option 1: Reset points & streaks */}
+              <div className="p-4 border border-slate-100 rounded-2xl bg-slate-50/50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                <div className="space-y-1">
+                  <h4 className="font-extrabold text-slate-700 text-sm">
+                    🔄 Сбросить балансы монет и серии отметок
+                  </h4>
+                  <p className="text-slate-400 text-[11px] leading-normal max-w-md">
+                    Обнулит монеты у всех детей в семье, а также сбросит серии ежедневных отметок в Дневнике (Day Streak = 0).
+                  </p>
+                </div>
+                <button
+                  onClick={handleResetAllBalancesAndStreaks}
+                  disabled={loading}
+                  className="w-full sm:w-auto py-2 px-4 bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 font-extrabold text-xs rounded-xl shadow-xs transition-all cursor-pointer text-center"
+                >
+                  Сбросить серии
+                </button>
+              </div>
+
+              {/* Option 1.5: Clear old chores */}
+              <div className="p-4 border border-slate-100 rounded-2xl bg-slate-50/50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                <div className="space-y-1">
+                  <h4 className="font-extrabold text-slate-700 text-sm">
+                    🧹 Удалить архивные и старые задания
+                  </h4>
+                  <p className="text-slate-400 text-[11px] leading-normal max-w-md">
+                    Удалит из базы все завершенные (выполненные и оплаченные) и отмененные задания, чтобы очистить списки и исправить баги.
+                  </p>
+                </div>
+                <button
+                  onClick={handleClearOldChores}
+                  disabled={loading}
+                  className="w-full sm:w-auto py-2 px-4 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 font-extrabold text-xs rounded-xl shadow-xs transition-all cursor-pointer text-center"
+                >
+                  Очистить архив
+                </button>
+              </div>
+
+              {/* Option 2: Complete purge */}
+              <div className="p-4 border border-rose-100 rounded-2xl bg-rose-50/20 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                <div className="space-y-1">
+                  <h4 className="font-extrabold text-rose-700 text-sm">
+                    ⚠️ Полная очистка всей базы данных
+                  </h4>
+                  <p className="text-rose-600/70 text-[11px] leading-normal max-w-md">
+                    Удалит абсолютно все созданные задания, товары в магазине, всю историю выполненных заданий и покупок у всех пользователей.
+                  </p>
+                </div>
+                <button
+                  onClick={handleClearAllSystemData}
+                  disabled={loading}
+                  className="w-full sm:w-auto py-2 px-4 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all cursor-pointer text-center"
+                >
+                  Очистить всё
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CATEGORIES MANAGEMENT TAB */}
+      {activeTab === "categories" && (
+        <div className="space-y-6 max-w-xl">
+          <div className="bg-white border border-slate-200 shadow-sm rounded-3xl p-6 space-y-6">
+            <div>
+              <h3 className="text-base font-black text-slate-800 flex items-center gap-1.5">
+                <Tag className={`w-4 h-4 ${palette.text}`} />
+                Управление категориями магазина
+              </h3>
+              <p className="text-slate-400 text-xs mt-1 leading-relaxed">
+                Добавляйте новые или удаляйте старые категории для витрины наград. Дети смогут фильтровать призы по выбранным категориям в витрине.
+              </p>
+            </div>
+
+            {/* Current Categories List */}
+            <div className="space-y-2">
+              <label className="block text-[10px] font-bold text-slate-400 uppercase">Текущие категории ({(settings.categories || DEFAULT_CATEGORIES).length})</label>
+              <div className="flex flex-wrap gap-2 p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                {(settings.categories || DEFAULT_CATEGORIES).map((cat) => (
+                  <div
+                    key={cat}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black bg-white border border-slate-200 text-slate-700 shadow-2xs`}
+                  >
+                    <span>{cat}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveCategory(cat)}
+                      className="p-0.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
+                      title="Удалить категорию"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Add New Category Form */}
+            <div className="pt-2 border-t border-slate-100">
+              <label className="block text-[10px] font-bold text-slate-400 uppercase">Добавить новую категорию</label>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const fd = new FormData(e.currentTarget);
+                  const val = fd.get("newCat") as string;
+                  if (val) {
+                    handleAddCategory(val);
+                    e.currentTarget.reset();
+                  }
+                }}
+                className="flex gap-2 mt-1.5"
+              >
+                <input
+                  type="text"
+                  name="newCat"
+                  required
+                  placeholder="Например: Книги или Одежда"
+                  className="flex-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+                <button
+                  type="submit"
+                  className={`px-4 py-2.5 ${palette.bg} ${palette.hover} text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center gap-1 shrink-0`}
+                >
+                  <Plus className="w-3.5 h-3.5" /> Добавить
+                </button>
+              </form>
+            </div>
           </div>
         </div>
       )}

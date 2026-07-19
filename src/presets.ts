@@ -148,3 +148,5 @@ export const TAILWIND_COLOR_PALETTES = {
     accent: "orange"
   }
 };
+
+export const DEFAULT_CATEGORIES = ["Игры", "Игрушки", "Сладости", "Развлечения", "Другое"];

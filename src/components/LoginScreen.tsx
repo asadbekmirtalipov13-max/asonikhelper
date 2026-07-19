@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { auth, googleProvider, signInWithPopup } from "../firebase";
-import { FamilyUser } from "../types";
+import { FamilyUser, SiteSettings } from "../types";
 import { Shield, Sparkles } from "lucide-react";
 import { motion } from "motion/react";
 import { TAILWIND_COLOR_PALETTES } from "../presets";
@@ -10,9 +10,10 @@ interface LoginScreenProps {
   kids: FamilyUser[];
   parents: FamilyUser[];
   primaryColor: keyof typeof TAILWIND_COLOR_PALETTES;
+  settings?: SiteSettings;
 }
 
-export default function LoginScreen({ onLogin, kids, parents, primaryColor }: LoginScreenProps) {
+export default function LoginScreen({ onLogin, kids, parents, primaryColor, settings }: LoginScreenProps) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -75,11 +76,22 @@ export default function LoginScreen({ onLogin, kids, parents, primaryColor }: Lo
           <motion.div 
             animate={{ rotate: [0, 8, -8, 0] }}
             transition={{ repeat: Infinity, duration: 6, ease: "easeInOut" }}
-            className="inline-flex p-4 rounded-2xl bg-indigo-50 text-indigo-600 text-4xl mb-3 shadow-inner"
+            className="inline-flex p-3 rounded-2xl bg-indigo-50 text-indigo-600 text-4xl mb-3 shadow-inner w-16 h-16 items-center justify-center overflow-hidden shrink-0"
           >
-            🏪
+            {settings?.logo && (settings.logo.startsWith("http") || settings.logo.startsWith("data:")) ? (
+              <img 
+                src={settings.logo} 
+                alt="Logo" 
+                className="w-12 h-12 object-contain"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              settings?.logo || "🏪"
+            )}
           </motion.div>
-          <h1 className="text-2xl font-black text-slate-800 tracking-tight">HELPER</h1>
+          <h1 className="text-2xl font-black text-slate-800 tracking-tight">
+            {settings?.title && settings.title !== "Семейный Маркетплейс и Квесты" ? settings.title : "HELPER"}
+          </h1>
           <p className="text-slate-400 text-xs font-bold tracking-wider uppercase mt-1">powered by ASONIK</p>
         </div>
 

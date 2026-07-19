@@ -1,15 +1,15 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Chore, FamilyUser, MarketItem, Purchase, SiteSettings } from "../types";
+import { Chore, FamilyUser, MarketItem, Purchase, SiteSettings, Transaction } from "../types";
 import { db } from "../firebase";
 import { doc, updateDoc, setDoc, getDoc } from "firebase/firestore";
 import { 
   Sparkles, Award, Clock, Camera, Check, ShoppingBag, 
   Trash2, Flame, Gift, Compass, ShieldAlert, CheckCircle, 
-  X, AlertCircle, RefreshCw, Upload, Image as ImageIcon, User, Search
+  X, AlertCircle, RefreshCw, Upload, Image as ImageIcon, User, Search, Send
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { TAILWIND_COLOR_PALETTES } from "../presets";
-import { uploadImageToImgbb } from "../utils/upload";
+import { TAILWIND_COLOR_PALETTES, DEFAULT_CATEGORIES } from "../presets";
+import { uploadImageToImgbb, compressImageFile } from "../utils/upload";
 import { sendTelegramNotification } from "../utils/telegram";
 
 interface KidDashboardProps {
@@ -17,10 +17,13 @@ interface KidDashboardProps {
   chores: Chore[];
   marketItems: MarketItem[];
   purchases: Purchase[];
+  transactions: Transaction[];
   settings: SiteSettings;
   primaryColor: keyof typeof TAILWIND_COLOR_PALETTES;
   showAlert: (title: string, message: string) => void;
   showConfirm: (title: string, message: string, onConfirm: () => void) => void;
+  activeTab?: "quests" | "store" | "daily" | "profile";
+  setActiveTab?: (tab: "quests" | "store" | "daily" | "profile") => void;
 }
 
 export default function KidDashboard({
@@ -28,16 +31,47 @@ export default function KidDashboard({
   chores,
   marketItems,
   purchases,
+  transactions = [],
   settings,
   primaryColor,
   showAlert,
-  showConfirm
+  showConfirm,
+  activeTab: externalActiveTab,
+  setActiveTab: externalSetActiveTab
 }: KidDashboardProps) {
-  const [activeTab, setActiveTab] = useState<"quests" | "store" | "daily" | "profile">("quests");
+  const [internalActiveTab, setInternalActiveTab] = useState<"quests" | "store" | "daily" | "profile">("quests");
+  const activeTab = externalActiveTab !== undefined ? externalActiveTab : internalActiveTab;
+  const setActiveTab = externalSetActiveTab !== undefined ? externalSetActiveTab : setInternalActiveTab;
+
   const [loading, setLoading] = useState(false);
   const [now, setNow] = useState(new Date());
   const [searchTerm, setSearchTerm] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState<string>("");
   const [editingAvatar, setEditingAvatar] = useState(false);
+
+  const [kidTelegramId, setKidTelegramId] = useState(currentUser.telegramChatId || "");
+  const [loadingTelegram, setLoadingTelegram] = useState(false);
+
+  useEffect(() => {
+    setKidTelegramId(currentUser.telegramChatId || "");
+  }, [currentUser.telegramChatId]);
+
+  const handleSaveKidTelegramId = async () => {
+    if (loadingTelegram) return;
+    setLoadingTelegram(true);
+    try {
+      const userRef = doc(db, "users", currentUser.id);
+      await updateDoc(userRef, {
+        telegramChatId: kidTelegramId.trim()
+      });
+      showAlert("Успешно 🎉", "Ваш Telegram ID сохранен! Теперь вы будете получать уведомления.");
+    } catch (err) {
+      console.error("Failed to update telegram ID:", err);
+      showAlert("Ошибка", "Не удалось сохранить Telegram ID.");
+    } finally {
+      setLoadingTelegram(false);
+    }
+  };
 
   // Countdowns update every second
   useEffect(() => {
@@ -50,6 +84,7 @@ export default function KidDashboard({
   const [proofPhotoBase64, setProofPhotoBase64] = useState<string | null>(null);
   const [cameraActive, setCameraActive] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(false);
+  const [compressingFile, setCompressingFile] = useState(false);
 
   // Shop confirmation modal state
   const [confirmPurchaseItem, setConfirmPurchaseItem] = useState<MarketItem | null>(null);
@@ -64,21 +99,65 @@ export default function KidDashboard({
   const kidChores = chores.filter(c => c.assignedTo.includes(currentUser.id));
   const activeKidPurchases = purchases.filter(p => p.kidId === currentUser.id);
 
+  const sortedFilteredItems = marketItems
+    .filter(item => {
+      if (item.hidden) return false;
+      const matchesSearch = item.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                            item.description.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesCategory = selectedCategory === "" || item.category === selectedCategory;
+      return matchesSearch && matchesCategory;
+    })
+    .sort((a, b) => {
+      if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+      const oA = a.sortOrder ?? 0;
+      const oB = b.sortOrder ?? 0;
+      if (oA !== oB) return oA - oB;
+      const tA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
+      const tB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
+      return tB - tA;
+    });
+
   // 1. Daily Check-in Claim logic
   const todayStr = now.toISOString().split("T")[0]; // YYYY-MM-DD
   const canClaimDaily = currentUser.lastCheckIn !== todayStr;
+  
+  // Calculate if the streak is broken:
+  // If last check-in exists, and it's not today, and it's not yesterday, then the streak is broken!
+  let isStreakBroken = false;
+  let yesterdayStr = "";
+  {
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    yesterdayStr = yesterday.toISOString().split("T")[0];
+    
+    if (currentUser.lastCheckIn && currentUser.lastCheckIn !== todayStr && currentUser.lastCheckIn !== yesterdayStr) {
+      isStreakBroken = true;
+    }
+  }
+
   const nextClaimDayNum = canClaimDaily ? (currentUser.dailyStreak + 1) : currentUser.dailyStreak;
   // If streak exceeds 30, mod it or keep it growing
   const pointsToEarnToday = nextClaimDayNum;
 
   const handleDailyCheckIn = async () => {
-    if (!canClaimDaily || loading) return;
+    if (!canClaimDaily || isStreakBroken || loading) return;
 
     setLoading(true);
     try {
       const kidRef = doc(db, "users", currentUser.id);
       const newStreak = currentUser.dailyStreak + 1;
-      const newBalance = currentUser.points + pointsToEarnToday;
+      
+      let basePoints = pointsToEarnToday;
+      let chestPoints = 0;
+      let isChestDay = false;
+      
+      if (newStreak === 15 || newStreak === 30) {
+        chestPoints = Math.floor(Math.random() * 50) + 1; // 1 to 50 random coins
+        isChestDay = true;
+      }
+      
+      const totalEarnedToday = basePoints + chestPoints;
+      const newBalance = currentUser.points + totalEarnedToday;
 
       await updateDoc(kidRef, {
         points: newBalance,
@@ -86,16 +165,115 @@ export default function KidDashboard({
         lastCheckIn: todayStr
       });
 
+      // Log transaction
+      const txId = "tx-daily-" + Math.random().toString(36).substr(2, 9);
+      await setDoc(doc(db, "transactions", txId), {
+        id: txId,
+        kidId: currentUser.id,
+        kidName: currentUser.name,
+        type: "income",
+        amount: totalEarnedToday,
+        title: `Ежедневный бонус: День ${newStreak}`,
+        createdAt: new Date(),
+        balanceAfter: newBalance
+      });
+
       if (settings.telegramChatId) {
         await sendTelegramNotification(
-          `🔥 <b>Ежедневная отметка!</b>\nРебенок: ${currentUser.name} ${currentUser.avatar}\nСерия: <b>${newStreak} дней подряд!</b>\nПолучено сегодня: 🪙 <b>+${pointsToEarnToday} баллов</b>`,
+          `🔥 <b>Ежедневная отметка!</b>\nРебенок: ${currentUser.name} ${currentUser.avatar}\nСерия: <b>${newStreak} дней подряд!</b>\nПолучено сегодня: 🪙 <b>+${totalEarnedToday} баллов</b>${isChestDay ? ` (из них 🎁 +${chestPoints} из Сундука!)` : ""}`,
           settings.telegramChatId
         );
       }
 
-      showAlert("Поздравляем! 🎉", `Вы забрали ежедневную награду: +${pointsToEarnToday} монет! Ваша серия: ${newStreak} дн.!`);
+      if (isChestDay) {
+        showAlert(
+          "ОТКРЫТ СУНДУК! 🎁🎉",
+          `Ты успешно отметился на ${newStreak}-й день! Тебе начислено ${basePoints} монет за серию, а также ты открыл Сундук и получил еще +${chestPoints} монет! Итого получено: +${totalEarnedToday} монет! Ура!`
+        );
+      } else {
+        showAlert("Поздравляем! 🎉", `Вы забрали ежедневную награду: +${totalEarnedToday} монет! Ваша серия: ${newStreak} дн.!`);
+      }
     } catch (err) {
       console.error("Daily checkin failed:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRestoreStreak = async () => {
+    if (loading) return;
+
+    const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const restoresUsed = (currentUser.lastRestoreMonth === currentMonthStr) 
+      ? (currentUser.restoresUsedThisMonth || 0) 
+      : 0;
+
+    const isFree = restoresUsed < 2;
+    const cost = isFree ? 0 : 200;
+
+    if (!isFree && currentUser.points < cost) {
+      showAlert("Недостаточно монет 🪙", "У тебя нет 200 монет для платного восстановления серии.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const yesterday = new Date(now);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayStr = yesterday.toISOString().split("T")[0];
+
+      const kidRef = doc(db, "users", currentUser.id);
+      
+      const updatedFields: any = {
+        lastCheckIn: yesterdayStr,
+        restoresUsedThisMonth: restoresUsed + 1,
+        lastRestoreMonth: currentMonthStr
+      };
+
+      if (!isFree) {
+        updatedFields.points = currentUser.points - cost;
+      }
+
+      await updateDoc(kidRef, updatedFields);
+
+      // Log transaction if paid restore
+      if (!isFree) {
+        const txId = "tx-restore-" + Math.random().toString(36).substr(2, 9);
+        await setDoc(doc(db, "transactions", txId), {
+          id: txId,
+          kidId: currentUser.id,
+          kidName: currentUser.name,
+          type: "expense",
+          amount: cost,
+          title: "Восстановление серии ежедневных отметок",
+          createdAt: new Date(),
+          balanceAfter: currentUser.points - cost
+        });
+      }
+
+      showAlert("Ура! 🎉", isFree 
+        ? "Твоя серия восстановлена бесплатно! Теперь можешь отметиться за сегодня! ⚡"
+        : `Твоя серия восстановлена за 200 монет! Теперь можешь отметиться за сегодня! 🪙`
+      );
+    } catch (err) {
+      console.error("Streak restore failed:", err);
+      showAlert("Ошибка", "Не удалось восстановить серию. Попробуйте еще раз.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResetStreakAndStartOver = async () => {
+    setLoading(true);
+    try {
+      const kidRef = doc(db, "users", currentUser.id);
+      await updateDoc(kidRef, {
+        dailyStreak: 0,
+        lastCheckIn: "" // clear checkin to allow claim immediately
+      });
+      showAlert("Сброшено!", "Серия сброшена. Ты можешь начать забирать награды с Дня 1! Удачи! 🚀");
+    } catch (err) {
+      console.error("Reset streak failed:", err);
     } finally {
       setLoading(false);
     }
@@ -105,7 +283,9 @@ export default function KidDashboard({
   const handleAcceptChore = async (choreId: string, title: string) => {
     try {
       const choreRef = doc(db, "chores", choreId);
-      const deadlineAt = new Date(Date.now() + 60 * 60 * 1000); // +60 mins from now to finish
+      const chore = chores.find(c => c.id === choreId);
+      const limitMinutes = chore?.executionLimitMinutes || 60;
+      const deadlineAt = new Date(Date.now() + limitMinutes * 60 * 1000);
 
       await updateDoc(choreRef, {
         status: "accepted",
@@ -115,7 +295,7 @@ export default function KidDashboard({
 
       if (settings.telegramChatId) {
         await sendTelegramNotification(
-          `🏃 <b>Квест принят в работу!</b>\nИсполнитель: ${currentUser.name} ${currentUser.avatar}\nКвест: <b>${title}</b>\n\n<i>Время на выполнение: 60 минут!</i>`,
+          `🏃 <b>Квест принят в работу!</b>\nРебенок: ${currentUser.name} ${currentUser.avatar}\nКвест: <b>${title}</b>\n\n<i>Время на выполнение: ${limitMinutes} минут!</i>`,
           settings.telegramChatId
         );
       }
@@ -137,12 +317,60 @@ export default function KidDashboard({
 
           if (settings.telegramChatId) {
             await sendTelegramNotification(
-              `⚠️ <b>Ребенок отказался от квеста!</b>\nИсполнитель: ${currentUser.name} ${currentUser.avatar}\nКвест: <b>${title}</b>`,
+              `⚠️ <b>Ребенок отказался от квеста!</b>\nРебенок: ${currentUser.name} ${currentUser.avatar}\nКвест: <b>${title}</b>`,
               settings.telegramChatId
             );
           }
         } catch (err) {
           console.error("Decline chore failed:", err);
+        }
+      }
+    );
+  };
+
+  const handleCancelActiveChore = async (choreId: string, title: string) => {
+    showConfirm(
+      "Штраф за отмену квеста 🪙",
+      "ВНИМАНИЕ! Вы действительно хотите отменить этот активный квест? За отмену принятого в работу задания спишется штраф в размере 20 монет 🪙 с вашего баланса!",
+      async () => {
+        setLoading(true);
+        try {
+          const newPoints = currentUser.points - 20;
+          const kidRef = doc(db, "users", currentUser.id);
+          await updateDoc(kidRef, { points: newPoints });
+
+          const choreRef = doc(db, "chores", choreId);
+          await updateDoc(choreRef, {
+            status: "declined",
+            acceptedBy: null
+          });
+
+          // Log transaction
+          const txId = "tx-cancel-" + Math.random().toString(36).substr(2, 9);
+          await setDoc(doc(db, "transactions", txId), {
+            id: txId,
+            kidId: currentUser.id,
+            kidName: currentUser.name,
+            type: "expense",
+            amount: 20,
+            title: `Штраф за отмену квеста: ${title}`,
+            createdAt: new Date(),
+            balanceAfter: newPoints
+          });
+
+          if (settings.telegramChatId) {
+            await sendTelegramNotification(
+              `⚠️ <b>Квест отменен ребенком! Списано 20 монет штрафа!</b>\nРебенок: ${currentUser.name} ${currentUser.avatar}\nКвест: <b>${title}</b>\nНовый баланс: 🪙 <b>${newPoints} монет</b>`,
+              settings.telegramChatId
+            );
+          }
+
+          showAlert("Внимание ⚠️", "Вы отменили принятое задание. С вашего счета списано 20 монет штрафа.");
+        } catch (err) {
+          console.error("Failed to cancel active chore:", err);
+          showAlert("Ошибка", "Не удалось отменить задание: " + err);
+        } finally {
+          setLoading(false);
         }
       }
     );
@@ -193,14 +421,27 @@ export default function KidDashboard({
     }
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setProofPhotoBase64(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+      setCompressingFile(true);
+      try {
+        const compressedBase64 = await compressImageFile(file, 1024, 1024, 0.8);
+        if (compressedBase64) {
+          setProofPhotoBase64(compressedBase64);
+        } else {
+          throw new Error("Empty compressed image output");
+        }
+      } catch (err) {
+        console.error("Image compression failed, trying fallback FileReader:", err);
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          setProofPhotoBase64(reader.result as string);
+        };
+        reader.readAsDataURL(file);
+      } finally {
+        setCompressingFile(false);
+      }
     }
   };
 
@@ -229,7 +470,7 @@ export default function KidDashboard({
       // 3. Send Telegram notify to Parent
       if (settings.telegramChatId) {
         await sendTelegramNotification(
-          `📸 <b>Отчет по заданию отправлен!</b>\nИсполнитель: ${currentUser.name} ${currentUser.avatar}\nКвест: <b>${submittingChore.title}</b>\n\n<i>Родители, пожалуйста, проверьте отчет и оцените старания!</i>`,
+          `📸 <b>Отчет по заданию отправлен!</b>\nРебенок: ${currentUser.name} ${currentUser.avatar}\nКвест: <b>${submittingChore.title}</b>\n\n<i>Родители, пожалуйста, проверьте отчет и оцените старания!</i>`,
           settings.telegramChatId
         );
       }
@@ -265,6 +506,19 @@ export default function KidDashboard({
       // 1. Deduct points from child balance
       const newPoints = currentUser.points - item.points;
       await updateDoc(kidRef, { points: newPoints });
+
+      // Log transaction
+      const txId = "tx-buy-" + Math.random().toString(36).substr(2, 9);
+      await setDoc(doc(db, "transactions", txId), {
+        id: txId,
+        kidId: currentUser.id,
+        kidName: currentUser.name,
+        type: "expense",
+        amount: item.points,
+        title: `Покупка товара: ${item.title}`,
+        createdAt: new Date(),
+        balanceAfter: newPoints
+      });
 
       // 2. Decrement store inventory if stock positive
       if (item.stock > 0) {
@@ -335,11 +589,14 @@ export default function KidDashboard({
       {/* Header Cards Bar */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {/* Points Counter */}
-        <div className="bg-amber-100/60 border border-amber-200 rounded-3xl p-4 flex items-center justify-between shadow-sm relative overflow-hidden group">
-          <div className="absolute -bottom-6 -right-6 text-7xl select-none opacity-10 group-hover:scale-110 transition-transform">🪙</div>
+        <div className="bg-gradient-to-br from-amber-400 via-yellow-500 to-orange-500 text-white rounded-3xl p-4 flex flex-col justify-between shadow-md relative overflow-hidden group">
+          <div className="absolute -bottom-6 -right-6 text-7xl select-none opacity-15 group-hover:scale-110 transition-transform">🪙</div>
           <div>
-            <div className="text-[10px] font-extrabold text-amber-800 uppercase tracking-wider">Мой Баланс</div>
-            <div className="text-2xl font-black text-amber-700 mt-1">🪙 {currentUser.points}</div>
+            <div className="text-[9px] font-black text-amber-100 uppercase tracking-wider">Семейный Банк</div>
+            <div className="text-xl md:text-2xl font-black mt-0.5 tracking-tight">🪙 99,999,999.99</div>
+          </div>
+          <div className="text-[10px] text-amber-50 font-bold mt-2 pt-1 border-t border-white/20">
+            Мои монеты: {currentUser.points} 🪙
           </div>
         </div>
 
@@ -530,12 +787,20 @@ export default function KidDashboard({
                       )}
                     </div>
 
-                    <button
-                      onClick={() => setSubmittingChore(chore)}
-                      className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-all shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
-                    >
-                      <Camera className="w-4 h-4" /> Сдать отчет (фотоотчет) 📸
-                    </button>
+                    <div className="space-y-2">
+                      <button
+                        onClick={() => setSubmittingChore(chore)}
+                        className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-all shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <Camera className="w-4 h-4" /> Сдать отчет (фотоотчет) 📸
+                      </button>
+                      <button
+                        onClick={() => handleCancelActiveChore(chore.id, chore.title)}
+                        className="w-full py-1.5 bg-rose-50 hover:bg-rose-100 border border-rose-100 hover:border-rose-200 text-rose-600 text-[10px] font-black rounded-xl transition-all flex items-center justify-center gap-1 cursor-pointer uppercase tracking-wider"
+                      >
+                        ⚠️ Отменить квест (-20 🪙)
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -596,84 +861,122 @@ export default function KidDashboard({
       {/* STORE REWARDS VIEW */}
       {activeTab === "store" && (
         <div className="space-y-6">
-          {/* Marketplace search input */}
-          <div className="relative w-full max-w-md bg-white p-1 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-2">
-            <div className="pl-3 text-slate-400">
-              <Search className="w-4 h-4" />
+          {/* Marketplace search input & Category Horizontal Tab List */}
+          <div className="space-y-4">
+            <div className="relative w-full max-w-md bg-white p-1 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-2">
+              <div className="pl-3 text-slate-400">
+                <Search className="w-4 h-4" />
+              </div>
+              <input
+                type="text"
+                placeholder="Поиск по магазину..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full bg-transparent text-slate-800 text-xs py-2 focus:outline-none placeholder-slate-400 font-bold"
+              />
+              {searchTerm && (
+                <button
+                  onClick={() => setSearchTerm("")}
+                  className="p-1 px-2.5 text-slate-400 hover:text-slate-600 font-black text-xs cursor-pointer"
+                >
+                  ✕
+                </button>
+              )}
             </div>
-            <input
-              type="text"
-              placeholder="Поиск по магазину..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full bg-transparent text-slate-800 text-xs py-2 focus:outline-none placeholder-slate-400 font-bold"
-            />
-            {searchTerm && (
+
+            {/* Category Filter Pills (Horizontal Scrolling list) */}
+            <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-none scroll-smooth">
               <button
-                onClick={() => setSearchTerm("")}
-                className="p-1 px-2.5 text-slate-400 hover:text-slate-600 font-black text-xs cursor-pointer"
+                onClick={() => setSelectedCategory("")}
+                className={`px-3 py-1.5 rounded-full text-[10px] font-black transition-all whitespace-nowrap cursor-pointer ${
+                  selectedCategory === ""
+                    ? `${palette.bg} text-white shadow-xs`
+                    : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"
+                }`}
               >
-                ✕
+                🚀 Все товары
               </button>
-            )}
+              {(settings.categories || DEFAULT_CATEGORIES).map(cat => (
+                <button
+                  key={cat}
+                  onClick={() => setSelectedCategory(cat)}
+                  className={`px-3 py-1.5 rounded-full text-[10px] font-black transition-all whitespace-nowrap cursor-pointer ${
+                    selectedCategory === cat
+                      ? `${palette.bg} text-white shadow-xs`
+                      : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  🏷️ {cat}
+                </button>
+              ))}
+            </div>
           </div>
 
-          {marketItems.filter(item => 
-            item.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
-            item.description.toLowerCase().includes(searchTerm.toLowerCase())
-          ).length === 0 ? (
-            <div className="p-12 text-center bg-white border border-dashed border-slate-200 rounded-3xl text-xs text-slate-400 font-medium">
-              Ничего не найдено по запросу "{searchTerm}" 🔍
+          {sortedFilteredItems.length === 0 ? (
+            <div className="p-12 text-center bg-white border border-dashed border-slate-200 rounded-3xl text-xs text-slate-400 font-medium shadow-2xs">
+              Ничего не найдено в этой категории 🔍
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {marketItems.filter(item => 
-                item.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                item.description.toLowerCase().includes(searchTerm.toLowerCase())
-              ).map((item) => {
+            /* Display 2 products per row on mobile to fit nicely! */
+            <div className="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-6">
+              {sortedFilteredItems.map((item) => {
                 const cannotAfford = currentUser.points < item.points;
                 return (
-                <div 
-                  key={item.id}
-                  className="bg-white border border-slate-200/80 rounded-3xl p-5 shadow-sm flex flex-col justify-between gap-4 hover:shadow-md transition-shadow relative overflow-hidden"
-                >
-                  <div className="space-y-3">
-                    <div className="aspect-video w-full bg-slate-50 border border-slate-100 rounded-2xl flex items-center justify-center text-5xl overflow-hidden">
-                      {item.image.startsWith("http") ? (
-                        <img src={item.image} alt={item.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                      ) : (
-                        item.image
+                  <div 
+                    key={item.id}
+                    className="bg-white border border-slate-200/80 rounded-2xl sm:rounded-3xl p-2.5 sm:p-5 shadow-xs flex flex-col justify-between gap-2.5 sm:gap-4 hover:shadow-sm transition-all relative overflow-hidden"
+                  >
+                    {/* Pinned label or Category Badge */}
+                    <div className="absolute top-1.5 left-1.5 z-10 flex flex-wrap gap-1">
+                      {item.pinned && (
+                        <span className="bg-amber-400 text-slate-900 font-black text-[8px] sm:text-[9px] px-1.5 py-0.5 rounded-md uppercase tracking-wider flex items-center gap-0.5 shadow-sm">
+                          📌 ЗАКРЕПЛЕНО
+                        </span>
+                      )}
+                      {item.category && (
+                        <span className="bg-slate-100 text-slate-600 font-bold text-[8px] sm:text-[9px] px-1.5 py-0.5 rounded-md">
+                          {item.category}
+                        </span>
                       )}
                     </div>
 
-                    <div className="space-y-1">
-                      <h4 className="font-bold text-slate-800 text-sm leading-tight truncate">{item.title}</h4>
-                      <p className="text-slate-500 text-xs line-clamp-2 leading-relaxed">{item.description}</p>
-                    </div>
-                  </div>
+                    <div className="space-y-1.5 sm:space-y-3">
+                      <div className="aspect-video w-full bg-slate-50 border border-slate-100 rounded-xl sm:rounded-2xl flex items-center justify-center text-3xl sm:text-5xl overflow-hidden relative">
+                        {item.image.startsWith("http") ? (
+                          <img src={item.image} alt={item.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                        ) : (
+                          item.image
+                        )}
+                      </div>
 
-                  <div className="border-t border-slate-100 pt-3 flex items-center justify-between gap-2">
-                    <div>
-                      <div className="text-[9px] font-bold text-slate-400 uppercase">Стоимость</div>
-                      <div className="font-black text-amber-600 text-sm">🪙 {item.points} монет</div>
+                      <div className="space-y-0.5">
+                        <h4 className="font-extrabold text-slate-800 text-xs sm:text-sm leading-tight truncate">{item.title}</h4>
+                        <p className="text-slate-400 text-[10px] sm:text-xs line-clamp-2 leading-relaxed h-7 sm:h-8">{item.description || "Без описания"}</p>
+                      </div>
                     </div>
-                    
-                    <button
-                      onClick={() => setConfirmPurchaseItem(item)}
-                      className={`py-2 px-4 text-xs font-bold rounded-xl transition-all shadow-sm flex items-center gap-1 cursor-pointer ${
-                        cannotAfford 
-                          ? "bg-slate-100 text-slate-400 border border-slate-200/50" 
-                          : `${palette.bg} ${palette.hover} text-white`
-                      }`}
-                    >
-                      <Gift className="w-3.5 h-3.5" />
-                      Купить
-                    </button>
+
+                    <div className="border-t border-slate-100 pt-2 sm:pt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-1 sm:gap-2">
+                      <div>
+                        <div className="text-[8px] sm:text-[9px] font-bold text-slate-400 uppercase">Стоимость</div>
+                        <div className="font-black text-amber-600 text-xs sm:text-sm">🪙 {item.points} монет</div>
+                      </div>
+                      
+                      <button
+                        onClick={() => setConfirmPurchaseItem(item)}
+                        className={`w-full sm:w-auto py-1.5 sm:py-2 px-2.5 sm:px-4 text-[10px] sm:text-xs font-black rounded-lg sm:rounded-xl transition-all shadow-2xs flex items-center justify-center gap-1 cursor-pointer ${
+                          cannotAfford 
+                            ? "bg-slate-100 text-slate-400 border border-slate-200/50" 
+                            : `${palette.bg} ${palette.hover} text-white`
+                        }`}
+                      >
+                        <Gift className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                        Купить
+                      </button>
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
           )}
 
           {/* Active kid's purchase logs */}
@@ -716,64 +1019,135 @@ export default function KidDashboard({
 
       {/* DAILY CHECK-IN VIEW */}
       {activeTab === "daily" && (
-        <div className="bg-white border border-slate-100 shadow-sm rounded-3xl p-6 space-y-6">
+        <div className="bg-white border border-slate-100 shadow-sm rounded-3xl p-4 sm:p-6 space-y-6">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-50 pb-4">
             <div>
-              <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+              <h3 className="text-base sm:text-lg font-black text-slate-800 flex items-center gap-2">
                 <Flame className="w-5 h-5 text-orange-500 animate-bounce" />
                 Календарь Ежедневных Баллов
               </h3>
-              <p className="text-slate-400 text-xs mt-0.5">
-                Заходите на сайт каждый день без пропусков! Каждый следующий день дает на 1 балл больше!
+              <p className="text-slate-400 text-xs mt-1">
+                Заходите на сайт каждый день! На 15-й и 30-й день вас ждет особый 📦 <b>Сундук с сюрпризом</b> (дополнительно от 1 до 50 монет)!
               </p>
             </div>
 
-            <button
-              onClick={handleDailyCheckIn}
-              disabled={!canClaimDaily || loading}
-              className={`w-full md:w-auto py-3 px-6 rounded-2xl font-black text-sm flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer ${
-                canClaimDaily 
-                  ? `${palette.bg} ${palette.hover} text-white animate-pulse-ring` 
-                  : "bg-slate-100 text-slate-400 border border-slate-200/50 cursor-not-allowed"
-              }`}
-            >
-              <CheckCircle className="w-4 h-4" />
-              {canClaimDaily ? `Забрать: +${pointsToEarnToday} 🪙 монет!` : "Сегодня пройдено!"}
-            </button>
+            {!isStreakBroken && (
+              <button
+                onClick={handleDailyCheckIn}
+                disabled={!canClaimDaily || loading}
+                className={`w-full md:w-auto py-3 px-6 rounded-2xl font-black text-sm flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer ${
+                  canClaimDaily 
+                    ? `${palette.bg} ${palette.hover} text-white animate-pulse-ring` 
+                    : "bg-slate-100 text-slate-400 border border-slate-200/50 cursor-not-allowed"
+                }`}
+              >
+                <CheckCircle className="w-4 h-4" />
+                {canClaimDaily ? `Забрать: +${pointsToEarnToday} 🪙 монет!` : "Сегодня пройдено!"}
+              </button>
+            )}
           </div>
 
+          {/* Streak Broken Section */}
+          {isStreakBroken && (
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="p-5 bg-rose-50 border border-rose-200 rounded-2xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4"
+            >
+              <div className="space-y-1">
+                <h4 className="font-extrabold text-rose-700 text-sm flex items-center gap-1.5">
+                  😢 Твоя серия прервалась!
+                </h4>
+                <p className="text-xs text-rose-600 leading-normal max-w-xl">
+                  Ты пропустил день! Чтобы продолжить получать увеличенные награды, восстанови серию.
+                  Каждый месяц дается <b>2 бесплатных восстановления</b>, а следующие стоят <b>200 монет 🪙</b>.
+                </p>
+                <div className="text-[10px] font-bold text-rose-500 pt-0.5 uppercase tracking-wider">
+                  Использовано в этом месяце: {currentUser.lastRestoreMonth === `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}` ? (currentUser.restoresUsedThisMonth || 0) : 0} из 2 восстановлений
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto shrink-0">
+                <button
+                  onClick={handleRestoreStreak}
+                  disabled={loading}
+                  className="py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer text-center"
+                >
+                  ⚡ Восстановить ({ (currentUser.lastRestoreMonth === `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}` ? (currentUser.restoresUsedThisMonth || 0) : 0) < 2 ? "Бесплатно!" : "200 монет" })
+                </button>
+                <button
+                  onClick={handleResetStreakAndStartOver}
+                  disabled={loading}
+                  className="py-2.5 px-4 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer text-center"
+                >
+                  🔄 Начать заново (с Дня 1)
+                </button>
+              </div>
+            </motion.div>
+          )}
+
           {/* Grid check-in map (30 days) */}
-          <div className="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-10 gap-3">
+          <div className="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-10 gap-2 sm:gap-3">
             {Array.from({ length: 30 }).map((_, idx) => {
               const dayNum = idx + 1;
               const points = dayNum; // Day 1 = 1 point, Day 2 = 2 points, etc
               
               // Determine status of this day
               const isClaimed = dayNum <= currentUser.dailyStreak && !canClaimDaily;
-              const isToday = canClaimDaily && dayNum === currentUser.dailyStreak + 1;
-              const isFuture = dayNum > currentUser.dailyStreak + (canClaimDaily ? 1 : 0);
+              const isToday = !isStreakBroken && canClaimDaily && dayNum === currentUser.dailyStreak + 1;
+              const isFuture = dayNum > currentUser.dailyStreak + (!isStreakBroken && canClaimDaily ? 1 : 0);
+              const isChestDay = dayNum === 15 || dayNum === 30;
 
               return (
                 <div
                   key={dayNum}
-                  className={`p-3 rounded-2xl border text-center flex flex-col justify-between items-center min-h-[90px] transition-all relative overflow-hidden ${
+                  className={`p-2 sm:p-3 rounded-2xl border text-center flex flex-col justify-between items-center min-h-[95px] sm:min-h-[110px] transition-all relative overflow-hidden ${
                     isClaimed 
-                      ? "bg-emerald-50 border-emerald-100 text-emerald-800" 
+                      ? "bg-emerald-700 border-emerald-800 text-white font-bold shadow-xs" 
                       : isToday 
                         ? "bg-orange-50 border-orange-300 ring-2 ring-orange-400/30 scale-105" 
-                        : "bg-slate-50 border-slate-200 text-slate-400"
+                        : "bg-slate-50/70 border-slate-100 text-slate-400"
                   }`}
                 >
-                  <div className="text-[10px] font-black uppercase tracking-wider">День {dayNum}</div>
-                  <div className="text-lg font-black my-1.5 flex flex-col items-center">
+                  <div className={`text-[9px] font-black uppercase tracking-wider ${isClaimed ? "text-emerald-100" : "text-slate-500"}`}>День {dayNum}</div>
+                  
+                  <div className="my-1.5 flex flex-col items-center">
                     {isClaimed ? (
-                      <Check className="w-5 h-5 text-emerald-600 font-bold" />
+                      <div className="flex flex-col items-center gap-0.5">
+                        <Check className="w-5 h-5 text-white font-bold stroke-[3px]" />
+                        <span className="text-[8px] font-extrabold text-emerald-100 uppercase">Забрано</span>
+                      </div>
+                    ) : isChestDay ? (
+                      <div className="flex flex-col items-center">
+                        {settings.chestImageUrl && (settings.chestImageUrl.startsWith("http") || settings.chestImageUrl.startsWith("data:")) ? (
+                          <img 
+                            src={settings.chestImageUrl} 
+                            alt="Chest" 
+                            className="w-8 h-8 object-contain animate-bounce" 
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          <span className="text-2xl animate-bounce" title="Сундук!">📦</span>
+                        )}
+                        <span className="text-[8px] font-black text-amber-600 uppercase mt-0.5">Сундук!</span>
+                      </div>
                     ) : (
-                      <span className={isToday ? "text-orange-600 font-black" : "text-slate-400"}>🪙 +{points}</span>
+                      <span className={`text-xs sm:text-sm font-black ${isToday ? "text-orange-600 font-black" : "text-slate-400"}`}>
+                        🪙 +{points}
+                      </span>
                     )}
                   </div>
-                  <div className="text-[9px] font-bold">
-                    {isClaimed ? "Забрано" : isToday ? "Ждет вас!" : "Закрыто"}
+
+                  <div className="text-[8px] sm:text-[9px] font-bold text-center leading-tight">
+                    {isClaimed ? (
+                      <span className="text-emerald-100">Готово!</span>
+                    ) : isToday ? (
+                      <span className="text-orange-600 animate-pulse">Забрать!</span>
+                    ) : isChestDay ? (
+                      <span className="text-amber-600 font-black">+{dayNum} + 📦 (1-50)</span>
+                    ) : (
+                      <span className="text-slate-400">Закрыто</span>
+                    )}
                   </div>
                 </div>
               );
@@ -855,6 +1229,32 @@ export default function KidDashboard({
               </div>
             )}
 
+            {/* Kid's Telegram Settings */}
+            <div className="bg-slate-50 border border-slate-200/60 rounded-3xl p-5 space-y-3 shadow-xs">
+              <h4 className="text-xs font-black text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                <Send className="w-3.5 h-3.5 text-sky-500" /> Telegram Оповещения для тебя
+              </h4>
+              <p className="text-[11px] text-slate-500 leading-normal">
+                Введи свой Telegram Chat ID, чтобы получать личные сообщения от нашего бота при появлении новых квестов и выплате монет! Найти Chat ID можно в ботах типа <code>@userinfobot</code> или <code>@GetMyChatID_Bot</code>.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={kidTelegramId}
+                  onChange={(e) => setKidTelegramId(e.target.value)}
+                  placeholder="Например: 582910482"
+                  className="flex-1 p-2.5 bg-white border border-slate-200 rounded-xl text-xs font-mono focus:outline-none focus:ring-1 focus:ring-indigo-500 font-bold"
+                />
+                <button
+                  onClick={handleSaveKidTelegramId}
+                  disabled={loadingTelegram}
+                  className={`px-4 py-2.5 ${palette.bg} ${palette.hover} text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer shrink-0`}
+                >
+                  {loadingTelegram ? "..." : "Сохранить 💾"}
+                </button>
+              </div>
+            </div>
+
             {/* Quests & Purchase history lists */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
               {/* Done Quests List */}
@@ -912,6 +1312,53 @@ export default function KidDashboard({
                 </div>
               </div>
             </div>
+
+            {/* Transaction History Log */}
+            <div className="space-y-3 pt-4 border-t border-slate-100">
+              <h4 className="text-xs font-black text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                📈 История операций (баланс)
+              </h4>
+              <div className="border border-slate-100 rounded-2xl overflow-hidden divide-y divide-slate-100 bg-slate-50 max-h-80 overflow-y-auto">
+                {transactions.filter(t => t.kidId === currentUser.id).length === 0 ? (
+                  <div className="p-8 text-center text-xs text-slate-400 font-semibold bg-white">
+                    История операций пуста. Зарабатывайте монеты на квестах! 💪
+                  </div>
+                ) : (
+                  transactions.filter(t => t.kidId === currentUser.id).map((tx) => {
+                    const isIncome = tx.type === "income";
+                    let dateStr = "Неизвестно";
+                    if (tx.createdAt) {
+                      try {
+                        const dateObj = tx.createdAt.toDate ? tx.createdAt.toDate() : new Date(tx.createdAt);
+                        dateStr = dateObj.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+                      } catch (e) {
+                        console.error(e);
+                      }
+                    }
+                    return (
+                      <div key={tx.id} className="p-3 bg-white hover:bg-slate-50/50 transition-colors flex justify-between items-center gap-3 text-xs">
+                        <div className="space-y-0.5 truncate text-left">
+                          <div className="font-extrabold text-slate-700 truncate">{tx.title}</div>
+                          <div className="text-[9px] text-slate-400 flex items-center gap-1.5 font-bold">
+                            <span>{dateStr}</span>
+                            <span>•</span>
+                            <span className="text-slate-500 font-extrabold">Остаток: {tx.balanceAfter} 🪙</span>
+                          </div>
+                        </div>
+                        <span className={`font-black px-2.5 py-1 rounded-lg text-[11px] shrink-0 ${
+                          isIncome 
+                            ? "text-emerald-700 bg-emerald-50 border border-emerald-100" 
+                            : "text-rose-700 bg-rose-50 border border-rose-100"
+                        }`}>
+                          {isIncome ? "+" : "-"}{tx.amount} 🪙
+                        </span>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
           </div>
         </div>
       )}
@@ -946,6 +1393,12 @@ export default function KidDashboard({
                     <RefreshCw className="w-8 h-8 text-indigo-500 animate-spin" />
                     <div className="text-xs font-bold text-slate-600">Загрузка фотоотчета на сервер...</div>
                     <p className="text-[10px] text-slate-400">Это займет несколько секунд</p>
+                  </div>
+                ) : compressingFile ? (
+                  <div className="py-12 flex flex-col items-center gap-3">
+                    <RefreshCw className="w-8 h-8 text-amber-500 animate-spin" />
+                    <div className="text-xs font-bold text-slate-600">Оптимизация и сжатие фото...</div>
+                    <p className="text-[10px] text-slate-400">Уменьшаем размер картинки для быстрой отправки 🚀</p>
                   </div>
                 ) : proofPhotoBase64 ? (
                   <div className="space-y-4 w-full">

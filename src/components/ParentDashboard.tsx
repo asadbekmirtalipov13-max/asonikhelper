@@ -1,15 +1,16 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Chore, FamilyUser, MarketItem, Purchase, SiteSettings } from "../types";
+import { Chore, FamilyUser, MarketItem, Purchase, SiteSettings, Transaction } from "../types";
 import { db } from "../firebase";
 import { collection, addDoc, updateDoc, doc, setDoc, deleteDoc } from "firebase/firestore";
 import { 
   Sparkles, Plus, Check, Clock, Eye, AlertCircle, Trash2, 
-  Tag, ShoppingBag, Award, Camera, CornerDownRight, ThumbsUp, ThumbsDown, RefreshCw
+  Tag, ShoppingBag, Award, Camera, CornerDownRight, ThumbsUp, ThumbsDown, RefreshCw,
+  Pencil, X, Pin, EyeOff, ArrowUp, ArrowDown
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { DEFAULT_CHORE_PRESETS, TAILWIND_COLOR_PALETTES } from "../presets";
+import { DEFAULT_CHORE_PRESETS, TAILWIND_COLOR_PALETTES, DEFAULT_CATEGORIES } from "../presets";
 import { sendTelegramNotification } from "../utils/telegram";
-import { uploadImageToImgbb } from "../utils/upload";
+import { uploadImageToImgbb, compressImageFile } from "../utils/upload";
 
 interface ParentDashboardProps {
   currentUser: FamilyUser;
@@ -17,6 +18,7 @@ interface ParentDashboardProps {
   chores: Chore[];
   marketItems: MarketItem[];
   purchases: Purchase[];
+  transactions: Transaction[];
   settings: SiteSettings;
   primaryColor: keyof typeof TAILWIND_COLOR_PALETTES;
   showAlert: (title: string, message: string) => void;
@@ -29,6 +31,7 @@ export default function ParentDashboard({
   chores,
   marketItems,
   purchases,
+  transactions = [],
   settings,
   primaryColor,
   showAlert,
@@ -41,6 +44,7 @@ export default function ParentDashboard({
   const [choreTitle, setChoreTitle] = useState("");
   const [choreDesc, setChoreDesc] = useState("");
   const [chorePoints, setChorePoints] = useState(10);
+  const [choreExecutionLimit, setChoreExecutionLimit] = useState(60);
   const [selectedKids, setSelectedKids] = useState<string[]>([]);
   
   // Custom points input state for partial approval
@@ -62,34 +66,152 @@ export default function ParentDashboard({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 5 * 1024 * 1024) {
-      alert("Изображение слишком большое! Максимальный размер 5МБ.");
-      return;
-    }
-
     setUploadingImage(true);
-    const reader = new FileReader();
-    reader.onloadend = async () => {
-      try {
-        const base64Str = reader.result as string;
-        const uploadedUrl = await uploadImageToImgbb(base64Str);
-        if (uploadedUrl) {
-          setItemImage(uploadedUrl);
-          alert("Изображение успешно загружено на сервер! 🎉");
-        } else {
-          alert("Не удалось загрузить изображение. Пожалуйста, попробуйте еще раз.");
-        }
-      } catch (err) {
-        console.error("Failed to upload image:", err);
-        showAlert("Ошибка", "Произошла ошибка при загрузке картинки.");
-      } finally {
-        setUploadingImage(false);
+    try {
+      const compressedBase64 = await compressImageFile(file, 1024, 1024, 0.8);
+      if (!compressedBase64) {
+        throw new Error("Could not compress image");
       }
-    };
-    reader.readAsDataURL(file);
+      const uploadedUrl = await uploadImageToImgbb(compressedBase64);
+      if (uploadedUrl) {
+        setItemImage(uploadedUrl);
+        showAlert("Успешно 🎉", "Изображение успешно сжато и загружено на сервер!");
+      } else {
+        showAlert("Ошибка", "Не удалось загрузить изображение. Пожалуйста, попробуйте еще раз.");
+      }
+    } catch (err) {
+      console.error("Failed to compress or upload image:", err);
+      showAlert("Ошибка", "Произошла ошибка при обработке и загрузке картинки.");
+    } finally {
+      setUploadingImage(false);
+    }
+  };
+
+  // Editing market item state
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  const [editItemName, setEditItemName] = useState("");
+  const [editItemDesc, setEditItemDesc] = useState("");
+  const [editItemCost, setEditItemCost] = useState(20);
+  const [editItemImage, setEditItemImage] = useState("🎁");
+  const [editItemStock, setEditItemStock] = useState(5);
+  const [editUploadingImage, setEditUploadingImage] = useState(false);
+  const editFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Category & pinning state for creation
+  const [itemCategory, setItemCategory] = useState("");
+  const [parentMarketCategoryFilter, setParentMarketCategoryFilter] = useState("");
+  const [itemPinned, setItemPinned] = useState(false);
+  const [itemHidden, setItemHidden] = useState(false);
+
+  // Category & pinning state for editing
+  const [editItemCategory, setEditItemCategory] = useState("");
+  const [editItemPinned, setEditItemPinned] = useState(false);
+  const [editItemHidden, setEditItemHidden] = useState(false);
+
+  const startEditingItem = (item: MarketItem) => {
+    setEditingItemId(item.id);
+    setEditItemName(item.title);
+    setEditItemDesc(item.description);
+    setEditItemCost(item.points);
+    setEditItemImage(item.image);
+    setEditItemStock(item.stock);
+    setEditItemCategory(item.category || "");
+    setEditItemPinned(!!item.pinned);
+    setEditItemHidden(!!item.hidden);
+  };
+
+  const cancelEditingItem = () => {
+    setEditingItemId(null);
+  };
+
+  const handleSaveEditedItem = async (id: string) => {
+    if (!editItemName.trim() || !editItemCost) return;
+    setLoading(true);
+    try {
+      const cats = settings.categories || DEFAULT_CATEGORIES;
+      const finalCat = editItemCategory || cats[0];
+      await updateDoc(doc(db, "marketplace", id), {
+        title: editItemName.trim(),
+        description: editItemDesc.trim(),
+        points: Number(editItemCost),
+        stock: Number(editItemStock),
+        image: editItemImage,
+        category: finalCat,
+        pinned: editItemPinned,
+        hidden: editItemHidden
+      });
+      setEditingItemId(null);
+      showAlert("Успешно 🎉", "Товар в магазине успешно обновлен!");
+    } catch (err) {
+      console.error("Failed to update market item:", err);
+      showAlert("Ошибка", "Не удалось обновить товар: " + err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleEditFileSelectImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setEditUploadingImage(true);
+    try {
+      const compressedBase64 = await compressImageFile(file, 1024, 1024, 0.8);
+      if (!compressedBase64) {
+        throw new Error("Could not compress image");
+      }
+      const uploadedUrl = await uploadImageToImgbb(compressedBase64);
+      if (uploadedUrl) {
+        setEditItemImage(uploadedUrl);
+        showAlert("Успешно 🎉", "Изображение успешно сжато и загружено на сервер!");
+      } else {
+        showAlert("Ошибка", "Не удалось загрузить изображение. Пожалуйста, попробуйте еще раз.");
+      }
+    } catch (err) {
+      console.error("Failed to compress or upload image:", err);
+      showAlert("Ошибка", "Произошла ошибка при обработке и загрузке картинки.");
+    } finally {
+      setEditUploadingImage(false);
+    }
   };
 
   const palette = TAILWIND_COLOR_PALETTES[primaryColor] || TAILWIND_COLOR_PALETTES.indigo;
+
+  // Compile unified transaction history list (who spent/earned, where, and what was their balance)
+  const compiledTransactions = [
+    ...chores
+      .filter(c => c.status === "approved")
+      .map(c => {
+        const kid = kids.find(k => k.id === c.assignedTo[0]);
+        const dateObj = c.completedAt?.toDate ? c.completedAt.toDate() : new Date(c.completedAt || c.createdAt);
+        return {
+          id: `tx-chore-${c.id}`,
+          date: dateObj,
+          kidName: kid?.name || "Ребенок",
+          kidAvatar: kid?.avatar || "👦",
+          kidBalance: kid?.points || 0,
+          type: "income",
+          title: c.title,
+          points: c.finalPoints || c.points,
+          status: "Выполнено"
+        };
+      }),
+    ...purchases.map(p => {
+      const kid = kids.find(k => k.id === p.kidId);
+      const dateObj = p.issuedAt?.toDate ? p.issuedAt.toDate() : p.createdAt?.toDate ? p.createdAt.toDate() : new Date(p.createdAt);
+      return {
+        id: `tx-purchase-${p.id}`,
+        date: dateObj,
+        kidName: p.kidName,
+        kidAvatar: kid?.avatar || "👦",
+        kidBalance: kid?.points || 0,
+        type: "expense",
+        title: p.productTitle,
+        points: p.points,
+        status: p.status === "issued" ? "Вручено" : "Ожидает"
+      };
+    })
+  ].sort((a, b) => b.date.getTime() - a.date.getTime());
 
   // Toggle child selection for task assignment
   const handleToggleKid = (kidId: string) => {
@@ -103,6 +225,11 @@ export default function ParentDashboard({
     setChoreTitle(preset.title);
     setChoreDesc(preset.description);
     setChorePoints(preset.points);
+    if (preset.executionLimitMinutes) {
+      setChoreExecutionLimit(preset.executionLimitMinutes);
+    } else {
+      setChoreExecutionLimit(60);
+    }
   };
 
   // Create new chore(s)
@@ -131,7 +258,8 @@ export default function ParentDashboard({
           status: "pending",
           createdAt: now,
           createdBy: currentUser.id,
-          timeoutAt: timeoutAt
+          timeoutAt: timeoutAt,
+          executionLimitMinutes: Number(choreExecutionLimit)
         };
 
         await setDoc(doc(db, "chores", choreId), newChore);
@@ -139,8 +267,16 @@ export default function ParentDashboard({
         // Send Telegram notification
         if (settings.telegramChatId) {
           await sendTelegramNotification(
-            `⚡ <b>Новое задание!</b>\nКому: ${kid.name} ${kid.avatar}\nЗадание: <b>${newChore.title}</b>\nОписание: ${newChore.description}\nНаграда: 🪙 <b>${newChore.points} баллов</b>\n\n<i>Время на принятие: 30 минут!</i>`,
+            `⚡ <b>Новое задание!</b>\nКому: ${kid.name} ${kid.avatar}\nЗадание: <b>${newChore.title}</b>\nОписание: ${newChore.description}\nНаграда: 🪙 <b>${newChore.points} баллов</b>\n\n<i>Время на принятие: 30 минут! Время на выполнение: ${newChore.executionLimitMinutes || 60} минут!</i>`,
             settings.telegramChatId
+          );
+        }
+
+        // Send direct Telegram notification to Kid
+        if (kid.telegramChatId) {
+          await sendTelegramNotification(
+            `⚡ <b>Новый квест для тебя!</b>\nКвест: <b>${newChore.title}</b>\nОписание: ${newChore.description}\nНаграда: 🪙 <b>${newChore.points} монет</b>\n\n<i>Прими его в работу в течение 30 минут! Время на выполнение: ${newChore.executionLimitMinutes || 60} минут! Удачи! 🚀</i>`,
+            kid.telegramChatId
           );
         }
       }
@@ -149,6 +285,7 @@ export default function ParentDashboard({
       setChoreTitle("");
       setChoreDesc("");
       setChorePoints(10);
+      setChoreExecutionLimit(60);
       setSelectedKids([]);
       showAlert("Успешно", "Задание успешно создано и отправлено!");
     } catch (err) {
@@ -199,11 +336,32 @@ export default function ParentDashboard({
         points: newBalance
       });
 
+      // Log transaction
+      const txId = "tx-chore-appr-" + Math.random().toString(36).substr(2, 9);
+      await setDoc(doc(db, "transactions", txId), {
+        id: txId,
+        kidId: kidId,
+        kidName: kid.name,
+        type: "income",
+        amount: pointsToAward,
+        title: `Выполнение квеста: ${chore.title}`,
+        createdAt: new Date(),
+        balanceAfter: newBalance
+      });
+
       // Send Telegram notification
       if (settings.telegramChatId) {
         await sendTelegramNotification(
           `✅ <b>Задание одобрено!</b>\nРебенок: ${kid.name} ${kid.avatar}\nКвест: <b>${chore.title}</b>\nНачислено: 🪙 <b>${pointsToAward} баллов</b> (из ${chore.points})\nОтзыв: "${feedback}"`,
           settings.telegramChatId
+        );
+      }
+
+      // Send direct Telegram notification to Kid
+      if (kid.telegramChatId) {
+        await sendTelegramNotification(
+          `🎉 <b>Твой квест одобрен родителями!</b>\nКвест: <b>${chore.title}</b>\nТебе начислено: 🪙 <b>${pointsToAward} монет!</b>\nОтзыв родителя: "${feedback}"\n\nТвой новый баланс: 🪙 <b>${newBalance} монет!</b> Поздравляем! 🥳`,
+          kid.telegramChatId
         );
       }
 
@@ -237,6 +395,14 @@ export default function ParentDashboard({
         );
       }
 
+      // Send direct Telegram notification to Kid
+      if (kid.telegramChatId) {
+        await sendTelegramNotification(
+          `⚠️ <b>Твой квест отклонен родителями!</b>\nКвест: <b>${chore.title}</b>\nПричина: "${feedback}"\n\n<i>Пожалуйста, исправь недочеты и отправь отчет заново! У тебя всё получится! 💪</i>`,
+          kid.telegramChatId
+        );
+      }
+
       setReviewChore(null);
       showAlert("Выполнено", "Задание возвращено ребенку на доработку.");
     } catch (err) {
@@ -253,7 +419,12 @@ export default function ParentDashboard({
 
     setLoading(true);
     try {
+      const cats = settings.categories || DEFAULT_CATEGORIES;
+      const finalCat = itemCategory || cats[0];
       const itemId = "item-" + Math.random().toString(36).substr(2, 9);
+      
+      const maxSortOrder = marketItems.reduce((max, item) => Math.max(max, item.sortOrder || 0), 0);
+
       const newItem: MarketItem = {
         id: itemId,
         title: itemName.trim(),
@@ -262,7 +433,11 @@ export default function ParentDashboard({
         stock: Number(itemStock),
         image: itemImage,
         createdBy: currentUser.id,
-        createdAt: new Date()
+        createdAt: new Date(),
+        category: finalCat,
+        pinned: itemPinned,
+        hidden: itemHidden,
+        sortOrder: maxSortOrder + 1
       };
 
       await setDoc(doc(db, "marketplace", itemId), newItem);
@@ -272,11 +447,62 @@ export default function ParentDashboard({
       setItemCost(20);
       setItemStock(5);
       setItemImage("🎁");
+      setItemCategory("");
+      setItemPinned(false);
+      setItemHidden(false);
       showAlert("Успешно", "Товар успешно добавлен в магазин!");
     } catch (err) {
       console.error("Failed to create market item:", err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Reordering, pinning, hiding helpers
+  const handleMoveItemOrder = async (item: MarketItem, direction: "up" | "down") => {
+    try {
+      const sortedItems = [...marketItems].sort((a, b) => {
+        if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+        const oA = a.sortOrder ?? 0;
+        const oB = b.sortOrder ?? 0;
+        if (oA !== oB) return oA - oB;
+        const tA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
+        const tB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
+        return tB - tA;
+      });
+
+      const idx = sortedItems.findIndex(i => i.id === item.id);
+      if (idx === -1) return;
+
+      const targetIdx = direction === "up" ? idx - 1 : idx + 1;
+      if (targetIdx < 0 || targetIdx >= sortedItems.length) return;
+
+      const otherItem = sortedItems[targetIdx];
+      
+      const orderA = item.sortOrder ?? idx;
+      const orderB = otherItem.sortOrder ?? targetIdx;
+
+      await updateDoc(doc(db, "marketplace", item.id), { sortOrder: orderB });
+      await updateDoc(doc(db, "marketplace", otherItem.id), { sortOrder: orderA });
+
+    } catch (err) {
+      console.error("Failed to swap order:", err);
+    }
+  };
+
+  const handleTogglePinItem = async (item: MarketItem) => {
+    try {
+      await updateDoc(doc(db, "marketplace", item.id), { pinned: !item.pinned });
+    } catch (err) {
+      console.error("Failed to toggle pin:", err);
+    }
+  };
+
+  const handleToggleHideItem = async (item: MarketItem) => {
+    try {
+      await updateDoc(doc(db, "marketplace", item.id), { hidden: !item.hidden });
+    } catch (err) {
+      console.error("Failed to toggle hide:", err);
     }
   };
 
@@ -311,6 +537,15 @@ export default function ParentDashboard({
           settings.telegramChatId
         );
       }
+
+      // Send direct Telegram notification to Kid
+      const kid = kids.find(k => k.id === purchase.kidId);
+      if (kid && kid.telegramChatId) {
+        await sendTelegramNotification(
+          `🎁 <b>Ура! Твой приз выдан родителями!</b>\nНазвание: <b>${purchase.productTitle}</b>\n\n<i>Родители вручили тебе твой заслуженный приз! Пользуйся с удовольствием! 🥰</i>`,
+          kid.telegramChatId
+        );
+      }
       showAlert("Выдано", "Статус изменен на 'Выдан'. Ребенок будет счастлив!");
     } catch (err) {
       console.error("Failed to update purchase status:", err);
@@ -321,6 +556,53 @@ export default function ParentDashboard({
 
   return (
     <div className="space-y-6">
+      {/* Premium Family Stats Bar */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {/* Treasury */}
+        <div className="bg-gradient-to-br from-amber-400 via-yellow-500 to-orange-500 text-white rounded-3xl p-4 shadow-sm relative overflow-hidden group">
+          <div className="absolute -bottom-6 -right-6 text-7xl select-none opacity-15 group-hover:scale-110 transition-transform">🪙</div>
+          <div>
+            <div className="text-[9px] font-black text-amber-100 uppercase tracking-wider">Семейный Банк (Лимит)</div>
+            <div className="text-xl md:text-2xl font-black mt-1">🪙 99,999,999.99</div>
+            <p className="text-[10px] text-amber-50/80 font-bold mt-1">Общий резерв монет</p>
+          </div>
+        </div>
+
+        {/* Children Count */}
+        <div className="bg-orange-50 border border-orange-100 rounded-3xl p-4 flex items-center justify-between shadow-xs relative overflow-hidden group">
+          <div className="absolute -bottom-6 -right-6 text-7xl select-none opacity-10 group-hover:scale-110 transition-transform">🧸</div>
+          <div>
+            <div className="text-[9px] font-black text-orange-800 uppercase tracking-wider">Дети в системе</div>
+            <div className="text-2xl font-black text-orange-700 mt-1">{kids.length} чел.</div>
+            <p className="text-[10px] text-orange-500 font-bold mt-1">Вход настроен</p>
+          </div>
+        </div>
+
+        {/* Quests Review */}
+        <div className="bg-indigo-50 border border-indigo-100 rounded-3xl p-4 flex items-center justify-between shadow-xs relative overflow-hidden group">
+          <div className="absolute -bottom-6 -right-6 text-7xl select-none opacity-10 group-hover:scale-110 transition-transform">⌛</div>
+          <div>
+            <div className="text-[9px] font-black text-indigo-800 uppercase tracking-wider font-sans">Ждут проверки</div>
+            <div className="text-2xl font-black text-indigo-700 mt-1">
+              {chores.filter(c => c.status === "completed").length} кв.
+            </div>
+            <p className="text-[10px] text-indigo-500 font-bold mt-1">Требуют оценки</p>
+          </div>
+        </div>
+
+        {/* Total Purchases count */}
+        <div className="bg-emerald-50 border border-emerald-100 rounded-3xl p-4 flex items-center justify-between shadow-xs relative overflow-hidden group">
+          <div className="absolute -bottom-6 -right-6 text-7xl select-none opacity-10 group-hover:scale-110 transition-transform">🎁</div>
+          <div>
+            <div className="text-[9px] font-black text-emerald-800 uppercase tracking-wider">Заказы наград</div>
+            <div className="text-2xl font-black text-emerald-700 mt-1">
+              {purchases.filter(p => p.status === "pending").length} шт.
+            </div>
+            <p className="text-[10px] text-emerald-500 font-bold mt-1">Ожидают выдачи</p>
+          </div>
+        </div>
+      </div>
+
       {/* Dashboard Submenu */}
       <div className="flex gap-2 bg-slate-100 p-1.5 rounded-2xl w-fit">
         <button
@@ -432,6 +714,23 @@ export default function ParentDashboard({
                     ⏱️ 30 минут
                   </div>
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase">Время на выполнение</label>
+                <select
+                  value={choreExecutionLimit}
+                  onChange={(e) => setChoreExecutionLimit(Number(e.target.value))}
+                  className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                >
+                  <option value={15}>⏱️ 15 минут</option>
+                  <option value={30}>⏱️ 30 минут</option>
+                  <option value={45}>⏱️ 45 минут</option>
+                  <option value={60}>⏱️ 1 час (60 мин)</option>
+                  <option value={120}>⏱️ 2 часа (120 мин)</option>
+                  <option value={180}>⏱️ 3 часа (180 мин)</option>
+                  <option value={1440}>⏱️ 1 сутки (24 часа)</option>
+                </select>
               </div>
 
               <div>
@@ -555,7 +854,8 @@ export default function ParentDashboard({
                       >
                         <button
                           onClick={() => handleDeleteChore(chore.id, chore.title)}
-                          className="p-1.5 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg absolute top-2.5 right-2.5 opacity-0 group-hover:opacity-100 transition-all cursor-pointer"
+                          className="p-2 bg-rose-600 text-white hover:bg-rose-700 active:bg-rose-800 rounded-full absolute top-2.5 right-2.5 shadow-md hover:scale-105 transition-all cursor-pointer z-10 flex items-center justify-center"
+                          title="Удалить задание"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -582,8 +882,10 @@ export default function ParentDashboard({
                             Награда: <span className="text-amber-600">🪙 {chore.points} баллов</span>
                           </div>
                           <div className="flex items-center gap-1">
-                            <Clock className="w-3 h-3 text-slate-400" />
-                            {chore.status === "pending" ? "До 30 мин" : "До 60 мин"}
+                            <Clock className="w-3.5 h-3.5 text-slate-400" />
+                            <span>
+                              {chore.status === "pending" ? "На принятие: 30 мин" : `На выполнение: ${chore.executionLimitMinutes || 60} мин`}
+                            </span>
                           </div>
                         </div>
                       </div>
@@ -646,6 +948,20 @@ export default function ParentDashboard({
                   onChange={(e) => setItemName(e.target.value)}
                   className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase">Категория товара</label>
+                <select
+                  value={itemCategory}
+                  onChange={(e) => setItemCategory(e.target.value)}
+                  className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                >
+                  <option value="">-- Выберите категорию --</option>
+                  {(settings.categories || DEFAULT_CATEGORIES).map(cat => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
+                </select>
               </div>
 
               <div>
@@ -748,6 +1064,28 @@ export default function ParentDashboard({
                 />
               </div>
 
+              <div className="flex gap-4 p-3 bg-slate-50 rounded-xl border border-slate-200 mt-2">
+                <label className="flex items-center gap-1.5 text-xs font-bold text-slate-600 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={itemPinned}
+                    onChange={(e) => setItemPinned(e.target.checked)}
+                    className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
+                  />
+                  <span>📌 Закрепить сверху</span>
+                </label>
+
+                <label className="flex items-center gap-1.5 text-xs font-bold text-slate-600 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={itemHidden}
+                    onChange={(e) => setItemHidden(e.target.checked)}
+                    className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
+                  />
+                  <span>👁️‍🗨️ Скрыть товар</span>
+                </label>
+              </div>
+
               <button
                 type="submit"
                 disabled={loading}
@@ -760,51 +1098,309 @@ export default function ParentDashboard({
 
           {/* Current products list */}
           <div className="xl:col-span-2 space-y-4">
-            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Товары на витрине ({marketItems.length})</h4>
-            {marketItems.length === 0 ? (
-              <div className="p-8 text-center bg-slate-50 border border-dashed border-slate-200 rounded-2xl text-xs text-slate-400 font-medium">
-                Магазин пуст. Добавьте первый товар!
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Товары на витрине ({marketItems.length})</h4>
+              
+              {/* Category selector filter */}
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-black text-slate-400 uppercase whitespace-nowrap">Категория:</span>
+                <select
+                  value={parentMarketCategoryFilter}
+                  onChange={(e) => setParentMarketCategoryFilter(e.target.value)}
+                  className="p-1 px-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer shadow-2xs"
+                >
+                  <option value="">Все категории</option>
+                  {(settings.categories || DEFAULT_CATEGORIES).map(cat => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
+                </select>
               </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {marketItems.map((item) => (
-                  <div 
-                    key={item.id}
-                    className="p-4 border border-slate-200 bg-white rounded-2xl flex justify-between gap-3 shadow-sm relative group"
-                  >
-                    <button
-                      onClick={() => handleDeleteMarketItem(item.id, item.title)}
-                      className="p-1.5 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-all cursor-pointer"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+            </div>
 
-                    <div className="flex gap-3">
-                      <div className="w-16 h-16 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center text-3xl shrink-0 overflow-hidden">
-                        {item.image.startsWith("http") ? (
-                          <img src={item.image} alt={item.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                        ) : (
-                          item.image
-                        )}
-                      </div>
+            {(() => {
+              const sortedFilteredItems = marketItems
+                .filter(item => parentMarketCategoryFilter === "" || item.category === parentMarketCategoryFilter)
+                .sort((a, b) => {
+                  if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+                  const oA = a.sortOrder ?? 0;
+                  const oB = b.sortOrder ?? 0;
+                  if (oA !== oB) return oA - oB;
+                  const tA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
+                  const tB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
+                  return tB - tA;
+                });
 
-                      <div className="space-y-0.5 truncate">
-                        <h5 className="font-bold text-slate-800 text-sm truncate pr-4">{item.title}</h5>
-                        <p className="text-slate-400 text-[10px] line-clamp-2 leading-relaxed">{item.description}</p>
-                        <div className="pt-1 flex items-center gap-2">
-                          <span className="text-xs font-extrabold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-100">
-                            🪙 {item.points} монет
-                          </span>
-                          <span className="text-[10px] text-slate-400 font-medium">
-                            Остаток: {item.stock === 0 ? "♾️ безлимит" : `${item.stock} шт`}
-                          </span>
+              return sortedFilteredItems.length === 0 ? (
+                <div className="p-8 text-center bg-slate-50 border border-dashed border-slate-200 rounded-2xl text-xs text-slate-400 font-medium">
+                  Нет товаров, соответствующих выбранным критериям.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {sortedFilteredItems.map((item, index) => {
+                    if (editingItemId === item.id) {
+                      return (
+                        <div 
+                          key={item.id}
+                          className="p-4 border-2 border-indigo-500 bg-indigo-50/20 rounded-2xl space-y-3 shadow-md relative"
+                        >
+                          <div className="flex justify-between items-center border-b border-indigo-100 pb-2">
+                            <span className="text-[10px] font-bold text-indigo-600 uppercase">Редактирование товара</span>
+                            <button
+                              type="button"
+                              onClick={cancelEditingItem}
+                              className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 cursor-pointer"
+                              title="Отмена"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+
+                          <div className="space-y-2">
+                            <div>
+                              <label className="block text-[9px] font-bold text-slate-400 uppercase">Название</label>
+                              <input
+                                type="text"
+                                value={editItemName}
+                                onChange={(e) => setEditItemName(e.target.value)}
+                                className="w-full mt-0.5 p-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-[9px] font-bold text-slate-400 uppercase">Категория</label>
+                              <select
+                                value={editItemCategory}
+                                onChange={(e) => setEditItemCategory(e.target.value)}
+                                className="w-full mt-0.5 p-1.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                              >
+                                <option value="">-- Выберите категорию --</option>
+                                {(settings.categories || DEFAULT_CATEGORIES).map(cat => (
+                                  <option key={cat} value={cat}>{cat}</option>
+                                ))}
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className="block text-[9px] font-bold text-slate-400 uppercase">Описание</label>
+                              <textarea
+                                value={editItemDesc}
+                                onChange={(e) => setEditItemDesc(e.target.value)}
+                                className="w-full mt-0.5 p-1.5 bg-white border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                rows={2}
+                              />
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="block text-[9px] font-bold text-slate-400 uppercase">Стоимость (🪙)</label>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  value={editItemCost}
+                                  onChange={(e) => setEditItemCost(Number(e.target.value))}
+                                  className="w-full mt-0.5 p-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-amber-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[9px] font-bold text-slate-400 uppercase">Количество (шт)</label>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={editItemStock}
+                                  onChange={(e) => setEditItemStock(Number(e.target.value))}
+                                  className="w-full mt-0.5 p-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                  title="0 для бесконечного количества"
+                                />
+                              </div>
+                            </div>
+
+                            <div>
+                              <label className="block text-[9px] font-bold text-slate-400 uppercase">Изображение / Иконка</label>
+                              <div className="flex gap-2 items-center mt-1">
+                                <div className="w-10 h-10 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center text-xl shrink-0 overflow-hidden">
+                                  {editItemImage.startsWith("http") ? (
+                                    <img src={editItemImage} alt="Preview" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                                  ) : (
+                                    editItemImage
+                                  )}
+                                </div>
+                                <div className="flex-grow flex gap-1 flex-wrap">
+                                  {["🎁", "🖥️", "🍕", "🎮", "🍭", "🧸"].map((em) => (
+                                    <button
+                                      key={em}
+                                      type="button"
+                                      onClick={() => setEditItemImage(em)}
+                                      className={`text-base p-1 rounded hover:bg-slate-100 cursor-pointer ${
+                                        editItemImage === em ? "bg-indigo-100 border border-indigo-200" : ""
+                                      }`}
+                                    >
+                                      {em}
+                                    </button>
+                                  ))}
+                                  <button
+                                    type="button"
+                                    onClick={() => editFileInputRef.current?.click()}
+                                    className="text-[9px] font-black text-indigo-600 hover:underline px-1.5 py-1 bg-indigo-50 rounded cursor-pointer"
+                                  >
+                                    {editUploadingImage ? "Загрузка..." : "Своё фото"}
+                                  </button>
+                                  <input
+                                    type="file"
+                                    ref={editFileInputRef}
+                                    accept="image/*"
+                                    onChange={handleEditFileSelectImage}
+                                    className="hidden"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex gap-4 p-2 bg-slate-50 rounded-xl border border-slate-200">
+                              <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-600 cursor-pointer select-none">
+                                <input
+                                  type="checkbox"
+                                  checked={editItemPinned}
+                                  onChange={(e) => setEditItemPinned(e.target.checked)}
+                                  className="rounded text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 cursor-pointer"
+                                />
+                                <span>📌 Закрепить</span>
+                              </label>
+
+                              <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-600 cursor-pointer select-none">
+                                <input
+                                  type="checkbox"
+                                  checked={editItemHidden}
+                                  onChange={(e) => setEditItemHidden(e.target.checked)}
+                                  className="rounded text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 cursor-pointer"
+                                />
+                                <span>👁️ Скрыть</span>
+                              </label>
+                            </div>
+
+                            <div className="flex gap-2 pt-2">
+                              <button
+                                type="button"
+                                onClick={cancelEditingItem}
+                                className="flex-1 py-1.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer text-center"
+                              >
+                                Отмена
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleSaveEditedItem(item.id)}
+                                disabled={loading}
+                                className={`flex-1 py-1.5 px-3 ${palette.bg} ${palette.hover} text-white font-bold text-xs rounded-xl shadow-xs transition-all cursor-pointer text-center`}
+                              >
+                                {loading ? "Сохранение..." : "Сохранить"}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div 
+                        key={item.id}
+                        className="p-4 border border-slate-200 bg-white rounded-2xl flex flex-col justify-between gap-3 shadow-sm relative group overflow-hidden"
+                      >
+                        {/* Display badges */}
+                        <div className="flex flex-wrap gap-1 mb-1">
+                          {item.pinned && (
+                            <span className="bg-amber-100 text-amber-800 font-black text-[8px] sm:text-[9px] px-1.5 py-0.5 rounded-md border border-amber-200 shadow-3xs uppercase">
+                              📌 ЗАКРЕПЛЕН
+                            </span>
+                          )}
+                          {item.hidden && (
+                            <span className="bg-rose-100 text-rose-800 font-black text-[8px] sm:text-[9px] px-1.5 py-0.5 rounded-md border border-rose-200 uppercase">
+                              👁️ СКРЫТ
+                            </span>
+                          )}
+                          {item.category && (
+                            <span className="bg-slate-100 text-slate-600 font-bold text-[8px] sm:text-[9px] px-1.5 py-0.5 rounded-md border border-slate-200">
+                              {item.category}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Control buttons */}
+                        <div className="absolute top-2 right-2 flex gap-1 z-10 opacity-70 group-hover:opacity-100 transition-opacity">
+                          {/* Order Up */}
+                          <button
+                            type="button"
+                            onClick={() => handleMoveItemOrder(item, "up")}
+                            disabled={index === 0}
+                            className={`p-1.5 rounded-full shadow-xs transition-all flex items-center justify-center ${
+                              index === 0 
+                                ? "bg-slate-100 text-slate-300 cursor-not-allowed" 
+                                : "bg-slate-900 text-white hover:bg-slate-700 hover:scale-105 cursor-pointer"
+                            }`}
+                            title="Переместить выше"
+                          >
+                            <ArrowUp className="w-3 h-3" />
+                          </button>
+
+                          {/* Order Down */}
+                          <button
+                            type="button"
+                            onClick={() => handleMoveItemOrder(item, "down")}
+                            disabled={index === sortedFilteredItems.length - 1}
+                            className={`p-1.5 rounded-full shadow-xs transition-all flex items-center justify-center ${
+                              index === sortedFilteredItems.length - 1 
+                                ? "bg-slate-100 text-slate-300 cursor-not-allowed" 
+                                : "bg-slate-900 text-white hover:bg-slate-700 hover:scale-105 cursor-pointer"
+                            }`}
+                            title="Переместить ниже"
+                          >
+                            <ArrowDown className="w-3 h-3" />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => startEditingItem(item)}
+                            className="p-1.5 bg-slate-950 text-white hover:bg-slate-800 active:bg-black rounded-full shadow-xs hover:scale-105 transition-all cursor-pointer flex items-center justify-center"
+                            title="Редактировать товар"
+                          >
+                            <Pencil className="w-3 h-3" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteMarketItem(item.id, item.title)}
+                            className="p-1.5 bg-rose-600 text-white hover:bg-rose-700 active:bg-rose-800 rounded-full shadow-xs hover:scale-105 transition-all cursor-pointer flex items-center justify-center"
+                            title="Удалить товар"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+
+                        <div className="flex gap-3 w-full pt-1">
+                          <div className="w-16 h-16 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center text-3xl shrink-0 overflow-hidden">
+                            {item.image.startsWith("http") ? (
+                              <img src={item.image} alt={item.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                            ) : (
+                              item.image
+                            )}
+                          </div>
+
+                          <div className="space-y-0.5 truncate flex-grow">
+                            <h5 className="font-extrabold text-slate-800 text-xs sm:text-sm truncate pr-16">{item.title}</h5>
+                            <p className="text-slate-400 text-[10px] sm:text-xs line-clamp-2 leading-relaxed">{item.description}</p>
+                            <div className="pt-1 flex items-center gap-2">
+                              <span className="text-[10px] sm:text-xs font-black text-amber-600 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-100">
+                                🪙 {item.points} монет
+                              </span>
+                              <span className="text-[9px] sm:text-[10px] text-slate-400 font-bold">
+                                Остаток: {item.stock === 0 ? "♾️ безлимит" : `${item.stock} шт`}
+                              </span>
+                            </div>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}
@@ -872,6 +1468,80 @@ export default function ParentDashboard({
               })}
             </div>
           )}
+
+          {/* Unified Transaction History Ledger */}
+          <div className="pt-6 border-t border-slate-100 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-xs font-black text-slate-500 uppercase tracking-wider">История транзакций и баланса</h4>
+                <p className="text-[10px] text-slate-400 mt-0.5">Учет всех начислений и списаний монет в вашей семье</p>
+              </div>
+              <span className="text-[10px] bg-slate-100 text-slate-600 font-bold px-2.5 py-1 rounded-full border border-slate-200">
+                Всего операций: {compiledTransactions.length}
+              </span>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200/60 rounded-3xl overflow-hidden">
+              {compiledTransactions.length === 0 ? (
+                <div className="p-8 text-center text-xs text-slate-400 font-medium">Транзакций пока не зарегистрировано.</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-100/80 border-b border-slate-200 text-[10px] font-black text-slate-500 uppercase tracking-wider">
+                        <th className="p-3.5 pl-5">Ребенок</th>
+                        <th className="p-3.5">Операция</th>
+                        <th className="p-3.5">Сумма</th>
+                        <th className="p-3.5">Баланс ребенка</th>
+                        <th className="p-3.5">Дата</th>
+                        <th className="p-3.5 pr-5 text-right">Статус</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-xs">
+                      {compiledTransactions.slice(0, 15).map((tx) => (
+                        <tr key={tx.id} className="hover:bg-white/80 transition-colors bg-white">
+                          <td className="p-3.5 pl-5 font-bold text-slate-800 flex items-center gap-2">
+                            <span className="text-lg bg-slate-50 p-1.5 rounded-lg border border-slate-100">{tx.kidAvatar}</span>
+                            <span>{tx.kidName}</span>
+                          </td>
+                          <td className="p-3.5">
+                            <div className="font-bold text-slate-700">{tx.title}</div>
+                            <div className="text-[9px] text-slate-400 mt-0.5">
+                              {tx.type === "income" ? "🏆 За выполненный квест" : "🎁 Заказан приз в магазине"}
+                            </div>
+                          </td>
+                          <td className="p-3.5">
+                            <span className={`font-extrabold px-2 py-0.5 rounded-md border text-[11px] ${
+                              tx.type === "income"
+                                ? "bg-emerald-50 text-emerald-700 border-emerald-100"
+                                : "bg-rose-50 text-rose-700 border-rose-100"
+                            }`}>
+                              {tx.type === "income" ? "+" : "-"}{tx.points} 🪙
+                            </span>
+                          </td>
+                          <td className="p-3.5 font-bold text-slate-600">
+                            🪙 {tx.kidBalance}
+                          </td>
+                          <td className="p-3.5 text-slate-400 font-medium text-[10px]">
+                            {tx.date.toLocaleDateString("ru-RU")} {tx.date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
+                          </td>
+                          <td className="p-3.5 pr-5 text-right">
+                            <span className={`text-[9px] font-extrabold px-2 py-0.5 rounded-full ${
+                              tx.status === "Выполнено" || tx.status === "Вручено"
+                                ? "bg-emerald-100 text-emerald-700"
+                                : "bg-amber-100 text-amber-700"
+                            }`}>
+                              {tx.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 

@@ -3,7 +3,7 @@ import {
   collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, orderBy 
 } from "firebase/firestore";
 import { db, auth, handleFirestoreError, OperationType } from "./firebase";
-import { FamilyUser, Chore, MarketItem, Purchase, SiteSettings } from "./types";
+import { FamilyUser, Chore, MarketItem, Purchase, SiteSettings, Transaction } from "./types";
 import { TAILWIND_COLOR_PALETTES } from "./presets";
 import LoginScreen from "./components/LoginScreen";
 import ParentDashboard from "./components/ParentDashboard";
@@ -23,6 +23,7 @@ export default function App() {
   const [chores, setChores] = useState<Chore[]>([]);
   const [marketItems, setMarketItems] = useState<MarketItem[]>([]);
   const [purchases, setPurchases] = useState<Purchase[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [settings, setSettings] = useState<SiteSettings>({
     title: "Семейный Маркетплейс и Квесты",
     logo: "🏪",
@@ -32,6 +33,7 @@ export default function App() {
 
   // Admin routing state: parents can toggle between dashboard and settings
   const [currentView, setCurrentView] = useState<"dashboard" | "admin">("dashboard");
+  const [kidActiveTab, setKidActiveTab] = useState<"quests" | "store" | "daily" | "profile">("quests");
   const [dbLoading, setDbLoading] = useState(true);
 
   const palette = TAILWIND_COLOR_PALETTES[settings.primaryColor] || TAILWIND_COLOR_PALETTES.indigo;
@@ -115,12 +117,29 @@ export default function App() {
       handleFirestoreError(error, OperationType.LIST, "purchases");
     });
 
+    // Listener for Transactions
+    const unsubTransactions = onSnapshot(collection(db, "transactions"), (snapshot) => {
+      const txList: Transaction[] = [];
+      snapshot.forEach((doc) => {
+        txList.push({ id: doc.id, ...doc.data() } as Transaction);
+      });
+      txList.sort((a, b) => {
+        const timeA = a.createdAt?.seconds || a.createdAt?.getTime?.() || 0;
+        const timeB = b.createdAt?.seconds || b.createdAt?.getTime?.() || 0;
+        return timeB - timeA;
+      });
+      setTransactions(txList);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, "transactions");
+    });
+
     return () => {
       unsubSettings();
       unsubUsers();
       unsubChores();
       unsubMarket();
       unsubPurchases();
+      unsubTransactions();
     };
   }, []);
 
@@ -263,6 +282,7 @@ export default function App() {
         kids={kids} 
         parents={parents}
         primaryColor={settings.primaryColor}
+        settings={settings}
       />
     );
   }
@@ -274,8 +294,26 @@ export default function App() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between">
           
           {/* Logo & Title */}
-          <div className="flex items-center gap-2.5">
-            <span className="text-3xl select-none filter drop-shadow-sm">{settings.logo || "🤝"}</span>
+          <div 
+            onClick={() => {
+              if (currentUser.role === "kid") {
+                setKidActiveTab("quests");
+              } else {
+                setCurrentView("dashboard");
+              }
+            }}
+            className="flex items-center gap-2.5 cursor-pointer hover:opacity-85 active:scale-95 transition-all select-none"
+          >
+            {settings.logo && (settings.logo.startsWith("http") || settings.logo.startsWith("data:")) ? (
+              <img 
+                src={settings.logo} 
+                alt="Logo" 
+                className="w-10 h-10 object-contain select-none filter drop-shadow-sm rounded-lg"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <span className="text-3xl select-none filter drop-shadow-sm">{settings.logo || "🤝"}</span>
+            )}
             <div>
               <h1 className="font-black text-slate-800 text-base sm:text-lg tracking-tight leading-none">
                 {settings.title && settings.title !== "Семейный Маркетплейс и Квесты" ? settings.title : "HELPER"}
@@ -378,10 +416,13 @@ export default function App() {
                 chores={chores}
                 marketItems={marketItems}
                 purchases={purchases}
+                transactions={transactions}
                 settings={settings}
                 primaryColor={settings.primaryColor}
                 showAlert={showAlert}
                 showConfirm={showConfirm}
+                activeTab={kidActiveTab}
+                setActiveTab={setKidActiveTab}
               />
             ) : currentView === "admin" ? (
               <AdminPanel
@@ -400,6 +441,7 @@ export default function App() {
                 chores={chores}
                 marketItems={marketItems}
                 purchases={purchases}
+                transactions={transactions}
                 settings={settings}
                 primaryColor={settings.primaryColor}
                 showAlert={showAlert}
