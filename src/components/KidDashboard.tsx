@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Chore, FamilyUser, MarketItem, Purchase, SiteSettings, Transaction } from "../types";
+import { AppNotification, Chore, FamilyUser, MarketItem, Purchase, SiteSettings, Transaction } from "../types";
 import { db } from "../firebase";
 import { doc, updateDoc, setDoc, getDoc } from "firebase/firestore";
 import { 
   Sparkles, Award, Clock, Camera, Check, ShoppingBag, 
   Trash2, Flame, Gift, Compass, ShieldAlert, CheckCircle, 
-  X, AlertCircle, RefreshCw, Upload, Image as ImageIcon, User, Search, Send
+  X, AlertCircle, RefreshCw, HelpCircle, Upload, Image as ImageIcon, User, Search, Send
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { TAILWIND_COLOR_PALETTES, DEFAULT_CATEGORIES } from "../presets";
@@ -19,6 +19,7 @@ interface KidDashboardProps {
   marketItems: MarketItem[];
   purchases: Purchase[];
   transactions: Transaction[];
+  notifications: AppNotification[];
   settings: SiteSettings;
   primaryColor: keyof typeof TAILWIND_COLOR_PALETTES;
   showAlert: (title: string, message: string) => void;
@@ -34,6 +35,7 @@ export default function KidDashboard({
   marketItems,
   purchases,
   transactions = [],
+  notifications = [],
   settings,
   primaryColor,
   showAlert,
@@ -50,6 +52,7 @@ export default function KidDashboard({
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string>("");
   const [editingAvatar, setEditingAvatar] = useState(false);
+  const [openFaq, setOpenFaq] = useState<string | null>(null);
 
   const [kidTelegramId, setKidTelegramId] = useState(currentUser.telegramChatId || "");
   const [loadingTelegram, setLoadingTelegram] = useState(false);
@@ -90,8 +93,10 @@ export default function KidDashboard({
 
   // Shop confirmation modal state
   const [confirmPurchaseItem, setConfirmPurchaseItem] = useState<MarketItem | null>(null);
+  const [purchaseCustomInput, setPurchaseCustomInput] = useState("");
 
   const [transferTargetId, setTransferTargetId] = useState("");
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [timeLeftToNextDay, setTimeLeftToNextDay] = useState("");
 
   useEffect(() => {
@@ -111,6 +116,44 @@ export default function KidDashboard({
   }, []);
   const [transferAmount, setTransferAmount] = useState("");
   const [loadingTransfer, setLoadingTransfer] = useState(false);
+
+  
+  const handleOpenNotifications = async () => {
+    setIsNotificationsOpen(true);
+    // Mark unread as read
+    const unread = myNotifications.filter(n => !n.read);
+    for (const n of unread) {
+      await updateDoc(doc(db, "notifications", n.id), { read: true });
+    }
+  };
+  
+  const handleOpenChest = async (notification) => {
+    if (!notification.chestPoints) return;
+    
+    // Add points
+    const kidRef = doc(db, "users", currentUser.id);
+    const newBalance = currentUser.points + notification.chestPoints;
+    await updateDoc(kidRef, { points: newBalance });
+    
+    // Log transaction
+    const txId = "tx-chest-" + Math.random().toString(36).substr(2, 9);
+    await setDoc(doc(db, "transactions", txId), {
+      id: txId,
+      kidId: currentUser.id,
+      kidName: currentUser.name,
+      type: "income",
+      amount: notification.chestPoints,
+      title: "Открыт подарочный сундук!",
+      createdAt: new Date(),
+      balanceAfter: newBalance
+    });
+    
+    // Update notification so it can't be opened again
+    await updateDoc(doc(db, "notifications", notification.id), { chestPoints: 0, title: notification.title + " (Открыто)" });
+    
+    showAlert("ОТКРЫТ СУНДУК! 🎉", `Вы получили ${notification.chestPoints} монет из сундука!`);
+  };
+
 
   const handleTransferCoins = async () => {
     const amount = Number(transferAmount);
@@ -195,6 +238,8 @@ export default function KidDashboard({
   const kidChores = chores.filter(c => c.assignedTo.includes(currentUser.id));
   const activeKidPurchases = purchases.filter(p => p.kidId === currentUser.id);
 
+  const myNotifications = notifications.filter(n => n.kidId === currentUser.id);
+  const unreadCount = myNotifications.filter(n => !n.read).length;
   const sortedFilteredItems = marketItems
     .filter(item => {
       if (item.hidden) return false;
@@ -204,6 +249,12 @@ export default function KidDashboard({
       return matchesSearch && matchesCategory;
     })
     .sort((a, b) => {
+      const isDiscounted = (item) => item.discountPercentage && item.discountUntil && (new Date(item.discountUntil?.toDate ? item.discountUntil.toDate() : item.discountUntil).getTime() > Date.now());
+      const aDisc = isDiscounted(a);
+      const bDisc = isDiscounted(b);
+      if (aDisc && !bDisc) return -1;
+      if (!aDisc && bDisc) return 1;
+      
       if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
       const oA = a.sortOrder ?? 0;
       const oB = b.sortOrder ?? 0;
@@ -524,48 +575,21 @@ export default function KidDashboard({
   };
 
   // Camera proof capture helpers
-  const handleStartCamera = async () => {
-    setCameraActive(true);
-    setProofPhotoBase64(null);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" },
-        audio: false
-      });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
-      }
-    } catch (err) {
-      console.error("Failed to access camera, fallback to file selection:", err);
-      setCameraActive(false);
-      showAlert("Внимание", "Не удалось запустить камеру. Пожалуйста, загрузите готовое фото через кнопку выбора файла.");
+  const nativeCameraRef = useRef<HTMLInputElement | null>(null);
+
+  const handleStartCamera = () => {
+    // Just trigger the native camera input
+    if (nativeCameraRef.current) {
+      nativeCameraRef.current.click();
     }
   };
 
   const handleCapturePhoto = () => {
-    if (videoRef.current && canvasRef.current) {
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      canvas.width = video.videoWidth || 640;
-      canvas.height = video.videoHeight || 480;
-      
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
-        setProofPhotoBase64(dataUrl);
-        handleStopCamera();
-      }
-    }
+    // not used anymore
   };
 
   const handleStopCamera = () => {
     setCameraActive(false);
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach(track => track.stop());
-    }
   };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -598,15 +622,20 @@ export default function KidDashboard({
 
     setUploadProgress(true);
     try {
+      
       // 1. Upload Base64 image to IMGBB securely via server proxy
-      const uploadedUrl = await uploadImageToImgbb(proofPhotoBase64);
+      let uploadedUrl = await uploadImageToImgbb(proofPhotoBase64);
+      
+      // Fallback: If ImgBB fails, try to save the compressed base64 directly to Firestore!
       if (!uploadedUrl) {
-        showAlert("Ошибка", "Ошибка при загрузке фото. Пожалуйста, попробуйте еще раз.");
-        setUploadProgress(false);
-        return;
+         console.warn("ImgBB upload failed, falling back to direct base64 storage.");
+         // We must ensure it's compressed enough for Firestore (1MB limit)
+         // compressImageFile already resizes and compresses. 
+         uploadedUrl = proofPhotoBase64;
       }
 
       // 2. Save proof photo and update status in database
+
       const choreRef = doc(db, "chores", submittingChore.id);
       await updateDoc(choreRef, {
         status: "completed",
@@ -644,6 +673,7 @@ export default function KidDashboard({
     if (currentUser.points < finalPrice) {
       showAlert("Ой!", "Недостаточно баллов для покупки! Выполняйте больше квестов. 🧹");
       setConfirmPurchaseItem(null);
+      setPurchaseCustomInput("");
       return;
     }
 
@@ -677,16 +707,17 @@ export default function KidDashboard({
 
       // 3. Save purchase log record in DB
       const newPurchase: Purchase = {
-        id: purchaseId,
-        productId: item.id,
-        productTitle: item.title,
-        productImage: item.image,
-        points: finalPrice,
-        kidId: currentUser.id,
-        kidName: currentUser.name,
-        status: "pending",
-        createdAt: new Date()
-      };
+          id: purchaseId,
+          productId: item.id,
+          productTitle: item.title,
+          productImage: item.image,
+          points: finalPrice,
+          kidId: currentUser.id,
+          kidName: currentUser.name,
+          status: "pending",
+          createdAt: new Date(),
+          customInput: item.requiresInput ? purchaseCustomInput.trim() : undefined
+        };
 
       await setDoc(doc(db, "purchases", purchaseId), newPurchase);
 
@@ -700,6 +731,7 @@ export default function KidDashboard({
 
       showAlert("Поздравляем! 🎉", `Успешно куплено! 🎉 С вашего счета списано ${finalPrice} монет. Ваша заявка успешно принята, ждите подтверждения!`);
       setConfirmPurchaseItem(null);
+      setPurchaseCustomInput("");
     } catch (err) {
       console.error("Failed to purchase item:", err);
     } finally {
@@ -755,6 +787,23 @@ export default function KidDashboard({
             </button>
           </div>
         </div>
+
+        
+        <button
+          onClick={handleOpenNotifications}
+          className="bg-white border border-slate-200 rounded-3xl p-4 flex flex-col items-center justify-center shadow-md relative hover:bg-slate-50 transition-colors group cursor-pointer"
+        >
+          <div className="relative">
+            <span className="text-3xl group-hover:scale-110 transition-transform block">🔔</span>
+            {unreadCount > 0 && (
+              <span className="absolute -top-1 -right-2 bg-rose-500 text-white font-extrabold text-[10px] w-5 h-5 flex items-center justify-center rounded-full animate-bounce shadow-md">
+                {unreadCount}
+              </span>
+            )}
+          </div>
+          <div className="text-[10px] font-black text-slate-500 uppercase mt-2">Уведомления</div>
+        </button>
+
 
         {/* Daily Streak */}
         <div className="bg-orange-100/60 border border-orange-200 rounded-3xl p-4 flex items-center justify-between shadow-sm relative overflow-hidden group">
@@ -1069,7 +1118,11 @@ export default function KidDashboard({
                 return (
                   <div 
                     key={item.id}
-                    className="bg-white border border-slate-200/80 rounded-2xl sm:rounded-3xl p-2.5 sm:p-5 shadow-xs flex flex-col justify-between gap-2.5 sm:gap-4 hover:shadow-sm transition-all relative overflow-hidden"
+                    className={`rounded-2xl sm:rounded-3xl p-2.5 sm:p-5 flex flex-col justify-between gap-2.5 sm:gap-4 transition-all relative overflow-hidden ${
+                      (item.discountPercentage && item.discountUntil && (new Date(item.discountUntil?.toDate ? item.discountUntil.toDate() : item.discountUntil).getTime() > Date.now()))
+                        ? "bg-rose-50 border-2 border-rose-500 shadow-md hover:shadow-rose-200" 
+                        : "bg-white border border-slate-200/80 shadow-xs hover:shadow-sm"
+                    }`}
                   >
                     {/* Pinned label or Category Badge */}
                     <div className="absolute top-1.5 left-1.5 z-10 flex flex-wrap gap-1">
@@ -1093,8 +1146,13 @@ export default function KidDashboard({
                           item.image
                         )}
                         {item.discountPercentage && item.discountUntil && (new Date(item.discountUntil?.toDate ? item.discountUntil.toDate() : item.discountUntil).getTime() > Date.now()) && (
-                          <div className="absolute top-2 right-2 bg-rose-500 text-white font-black text-[10px] px-2 py-1 rounded-lg animate-pulse shadow-md border border-rose-400">
-                            -{item.discountPercentage}% СКИДКА!
+                          <div className="absolute top-2 right-2 flex flex-col items-end gap-1">
+                            <div className="bg-rose-600 text-white font-black text-[10px] sm:text-xs px-2 py-1 rounded-lg shadow-lg border-2 border-rose-400 transform rotate-3">
+                              🔥 -{item.discountPercentage}% СКИДКА
+                            </div>
+                            <div className="bg-black/70 text-white font-bold text-[8px] sm:text-[9px] px-1.5 py-0.5 rounded-md backdrop-blur-sm">
+                              ⏳ До {new Date(item.discountUntil?.toDate ? item.discountUntil.toDate() : item.discountUntil).toLocaleString("ru-RU", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"})}
+                            </div>
                           </div>
                         )}
                       </div>
@@ -1105,17 +1163,25 @@ export default function KidDashboard({
                       </div>
                     </div>
 
-                    <div className="border-t border-slate-100 pt-2 sm:pt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-1 sm:gap-2">
-                      <div>
-                        <div className="text-[8px] sm:text-[9px] font-bold text-slate-400 uppercase">Стоимость</div>
-                        {item.discountPercentage && item.discountUntil && (new Date(item.discountUntil?.toDate ? item.discountUntil.toDate() : item.discountUntil).getTime() > Date.now()) ? (
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-black text-rose-600 text-xs sm:text-sm">🪙 {Math.max(1, Math.floor(item.points * (1 - item.discountPercentage / 100)))}</span>
-                            <span className="font-bold text-slate-400 text-[9px] sm:text-[10px] line-through">🪙 {item.points}</span>
-                          </div>
-                        ) : (
-                          <div className="font-black text-amber-600 text-xs sm:text-sm">🪙 {item.points} монет</div>
-                        )}
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 border-t border-slate-50 pt-2 sm:pt-3">
+                      <div className="flex items-center gap-1.5 font-black">
+                        <span className="text-amber-500 text-base sm:text-lg">🪙</span>
+                        <span className={`text-sm sm:text-lg tracking-tight ${
+                          (() => {
+                            const isDiscounted = item.discountPercentage && item.discountUntil && (new Date(item.discountUntil?.toDate ? item.discountUntil.toDate() : item.discountUntil).getTime() > Date.now());
+                            return isDiscounted ? "text-rose-600 line-through decoration-rose-300 opacity-50" : "text-amber-600";
+                          })()
+                        }`}>
+                          {item.points}
+                        </span>
+                        {(() => {
+                          const isDiscounted = item.discountPercentage && item.discountUntil && (new Date(item.discountUntil?.toDate ? item.discountUntil.toDate() : item.discountUntil).getTime() > Date.now());
+                          if (isDiscounted) {
+                            const newPrice = Math.max(1, Math.floor(item.points * (1 - item.discountPercentage / 100)));
+                            return <span className="text-rose-600 ml-1 font-extrabold bg-rose-100 px-1.5 py-0.5 rounded-md">🪙 {newPrice}</span>
+                          }
+                          return null;
+                        })()}
                       </div>
                       
                       <button
@@ -1123,10 +1189,10 @@ export default function KidDashboard({
                         className={`w-full sm:w-auto py-1.5 sm:py-2 px-2.5 sm:px-4 text-[10px] sm:text-xs font-black rounded-lg sm:rounded-xl transition-all shadow-2xs flex items-center justify-center gap-1 cursor-pointer ${
                           (() => {
                             const isDiscounted = item.discountPercentage && item.discountUntil && (new Date(item.discountUntil?.toDate ? item.discountUntil.toDate() : item.discountUntil).getTime() > Date.now());
-                            const finalPrice = isDiscounted ? Math.max(1, Math.floor(item.points * (1 - item.discountPercentage! / 100))) : item.points;
+                            const finalPrice = isDiscounted ? Math.max(1, Math.floor(item.points * (1 - item.discountPercentage / 100))) : item.points;
                             return currentUser.points < finalPrice;
-                          })() 
-                            ? "bg-slate-100 text-slate-400 border border-slate-200/50" 
+                          })()
+                            ? "bg-slate-100 text-slate-400 border border-slate-200/50"
                             : `${palette.bg} ${palette.hover} text-white`
                         }`}
                       >
@@ -1514,6 +1580,48 @@ export default function KidDashboard({
               </div>
             </div>
 
+            
+            {/* FAQ Section */}
+            <div className="pt-4 border-t border-slate-100">
+              <h4 className="text-sm font-black text-slate-800 uppercase flex items-center gap-2 mb-4">
+                <HelpCircle className="w-4 h-4 text-indigo-500" />
+                Частые вопросы (FAQ)
+              </h4>
+              <div className="space-y-3">
+                {(settings.faqs || []).map((faq) => (
+                  <div key={faq.id} className="border border-slate-200 rounded-2xl overflow-hidden bg-slate-50">
+                    <button
+                      onClick={() => setOpenFaq(openFaq === faq.id ? null : faq.id)}
+                      className="w-full text-left p-4 font-bold text-slate-700 text-sm flex justify-between items-center hover:bg-slate-100 transition-colors cursor-pointer"
+                    >
+                      {faq.question}
+                      <span className="text-slate-400 font-black">{openFaq === faq.id ? "—" : "+"}</span>
+                    </button>
+                    <AnimatePresence>
+                      {openFaq === faq.id && (
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: "auto", opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          className="px-4 pb-4 text-xs text-slate-600 leading-relaxed bg-white border-t border-slate-100"
+                        >
+                          <div className="pt-3">
+                            {faq.answer}
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                ))}
+                {(!settings.faqs || settings.faqs.length === 0) && (
+                  <div className="text-center p-4 text-slate-400 text-xs font-medium bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                    Здесь пока нет вопросов.
+                  </div>
+                )}
+              </div>
+            </div>
+
+
             {/* Transaction History Log */}
             <div className="space-y-3 pt-4 border-t border-slate-100">
               <h4 className="text-xs font-black text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
@@ -1644,6 +1752,14 @@ export default function KidDashboard({
                       <span className="text-xs font-bold text-slate-600 group-hover:text-indigo-600">Выбрать файл</span>
                       <input 
                         type="file" 
+                        accept="image/*"
+                        capture="environment"
+                        ref={nativeCameraRef}
+                        onChange={handleFileSelect}
+                        className="hidden"
+                      />
+                      <input 
+                        type="file" 
                         ref={fileInputRef} 
                         accept="image/*" 
                         onChange={handleFileSelect} 
@@ -1678,6 +1794,65 @@ export default function KidDashboard({
         )}
       </AnimatePresence>
 
+      
+      {/* Notifications Modal */}
+      <AnimatePresence>
+        {isNotificationsOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl overflow-hidden max-w-md w-full shadow-2xl border border-slate-100 flex flex-col max-h-[85vh]"
+            >
+              <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+                <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
+                  🔔 Ваши уведомления
+                </h3>
+                <button
+                  onClick={() => setIsNotificationsOpen(false)}
+                  className="p-1.5 hover:bg-slate-200 text-slate-400 hover:text-slate-700 rounded-lg text-xs font-bold cursor-pointer"
+                >
+                  Закрыть
+                </button>
+              </div>
+              <div className="p-5 overflow-y-auto space-y-3 bg-slate-50">
+                {myNotifications.length === 0 ? (
+                  <div className="text-center p-8 text-slate-400 text-xs font-bold">
+                    У вас пока нет уведомлений.
+                  </div>
+                ) : (
+                  myNotifications.map(n => (
+                    <div key={n.id} className="p-4 bg-white rounded-2xl shadow-sm border border-slate-100 flex gap-3 relative">
+                      <div className="text-2xl shrink-0">
+                        {n.type === "chest" ? "📦" : n.type === "message" ? "💬" : n.type === "quest" ? "📜" : "ℹ️"}
+                      </div>
+                      <div className="flex-1 space-y-1">
+                        <h4 className="font-bold text-slate-800 text-xs">{n.title}</h4>
+                        <p className="text-[10px] text-slate-500 leading-relaxed whitespace-pre-wrap">{n.text}</p>
+                        
+                        {n.type === "chest" && n.chestPoints > 0 && (
+                          <button
+                            onClick={() => handleOpenChest(n)}
+                            className="mt-2 w-full py-2 bg-gradient-to-r from-amber-400 to-orange-500 text-white font-black text-[10px] rounded-xl shadow-sm hover:shadow-md hover:scale-[1.02] transition-all flex items-center justify-center gap-1 cursor-pointer"
+                          >
+                            <Sparkles className="w-3 h-3" /> Открыть Сундук!
+                          </button>
+                        )}
+                        
+                        <div className="text-[8px] text-slate-300 font-bold mt-1 text-right">
+                          {n.createdAt?.toDate ? n.createdAt.toDate().toLocaleString("ru-RU") : "Только что"}
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* PURCHASE CONFIRMATION MODAL */}
       <AnimatePresence>
         {confirmPurchaseItem && (
@@ -1695,26 +1870,47 @@ export default function KidDashboard({
               <div className="space-y-1">
                 <h4 className="font-extrabold text-slate-800 text-base">Подтверждение покупки</h4>
                 <p className="text-slate-500 text-xs leading-normal">
-                  Вы действительно хотите купить <b>{confirmPurchaseItem.title}</b> за <span className="font-bold text-amber-600">🪙 {confirmPurchaseItem.points} монет</span>?
+                  Вы действительно хотите купить <b>{confirmPurchaseItem.title}</b> за <span className="font-bold text-amber-600">🪙 {
+                    (confirmPurchaseItem.discountPercentage && confirmPurchaseItem.discountUntil && (new Date(confirmPurchaseItem.discountUntil?.toDate ? confirmPurchaseItem.discountUntil.toDate() : confirmPurchaseItem.discountUntil).getTime() > Date.now())) 
+                    ? Math.max(1, Math.floor(confirmPurchaseItem.points * (1 - confirmPurchaseItem.discountPercentage / 100))) 
+                    : confirmPurchaseItem.points
+                  } монет</span>?
                 </p>
               </div>
 
-              <div className="bg-amber-50 p-3.5 border border-amber-100 rounded-2xl text-xs flex justify-between items-center">
+              {confirmPurchaseItem.requiresInput && (
+                <div className="text-left space-y-1 mt-2">
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase">{confirmPurchaseItem.inputLabel}</label>
+                  <input
+                    type="text"
+                    required
+                    value={purchaseCustomInput}
+                    onChange={(e) => setPurchaseCustomInput(e.target.value)}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    placeholder="Введите данные для покупки..."
+                  />
+                </div>
+              )}
+
+              <div className="bg-amber-50 p-3.5 border border-amber-100 rounded-2xl text-xs flex justify-between items-center mt-2">
                 <span className="text-slate-600">Ваш баланс: <b>🪙 {currentUser.points}</b></span>
-                <span className="text-slate-600">Останется: <b>🪙 {currentUser.points - confirmPurchaseItem.points}</b></span>
+                <span className="text-slate-600">Останется: <b>🪙 {currentUser.points - ((confirmPurchaseItem.discountPercentage && confirmPurchaseItem.discountUntil && (new Date(confirmPurchaseItem.discountUntil?.toDate ? confirmPurchaseItem.discountUntil.toDate() : confirmPurchaseItem.discountUntil).getTime() > Date.now())) ? Math.max(1, Math.floor(confirmPurchaseItem.points * (1 - confirmPurchaseItem.discountPercentage / 100))) : confirmPurchaseItem.points)}</b></span>
               </div>
 
               <div className="flex gap-2.5 pt-2">
                 <button
-                  onClick={() => setConfirmPurchaseItem(null)}
+                  onClick={() => {
+                    setConfirmPurchaseItem(null);
+                    setPurchaseCustomInput("");
+                  }}
                   className="flex-1 py-3 bg-slate-50 hover:bg-slate-100 text-slate-500 border border-slate-200 font-bold rounded-2xl text-xs transition-all cursor-pointer"
                 >
                   Отмена
                 </button>
                 <button
                   onClick={handleBuyItem}
-                  disabled={loading}
-                  className={`flex-1 py-3 ${palette.bg} ${palette.hover} text-white font-bold rounded-2xl text-xs transition-all shadow-sm cursor-pointer`}
+                  disabled={loading || (confirmPurchaseItem.requiresInput && !purchaseCustomInput.trim())}
+                  className={`flex-1 py-3 ${palette.bg} ${palette.hover} text-white font-bold rounded-2xl text-xs transition-all shadow-sm cursor-pointer disabled:opacity-50`}
                 >
                   Купить! 🚀
                 </button>

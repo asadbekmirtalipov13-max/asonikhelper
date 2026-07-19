@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import { Chore, FamilyUser, MarketItem, Purchase, SiteSettings, Transaction } from "../types";
+import { AppNotification, Chore, FamilyUser, MarketItem, Purchase, SiteSettings, Transaction } from "../types";
 import { db } from "../firebase";
 import { collection, addDoc, updateDoc, doc, setDoc, deleteDoc } from "firebase/firestore";
 import { 
@@ -20,6 +20,7 @@ interface ParentDashboardProps {
   marketItems: MarketItem[];
   purchases: Purchase[];
   transactions: Transaction[];
+  notifications: AppNotification[];
   settings: SiteSettings;
   primaryColor: keyof typeof TAILWIND_COLOR_PALETTES;
   showAlert: (title: string, message: string) => void;
@@ -33,6 +34,7 @@ export default function ParentDashboard({
   marketItems,
   purchases,
   transactions = [],
+  notifications = [],
   settings,
   primaryColor,
   showAlert,
@@ -78,9 +80,10 @@ export default function ParentDashboard({
       const uploadedUrl = await uploadImageToImgbb(compressedBase64);
       if (uploadedUrl) {
         setItemImage(uploadedUrl);
-        showAlert("Успешно 🎉", "Изображение успешно сжато и загружено на сервер!");
+        showAlert("Успешно 🎉", "Изображение успешно загружено на сервер!");
       } else {
-        showAlert("Ошибка", "Не удалось загрузить изображение. Пожалуйста, попробуйте еще раз.");
+        setItemImage(compressedBase64); // Fallback to base64
+        showAlert("Предупреждение", "Загрузка на сервер не удалась, но изображение сохранено локально!");
       }
     } catch (err) {
       console.error("Failed to compress or upload image:", err);
@@ -111,6 +114,11 @@ export default function ParentDashboard({
   const [editItemCategory, setEditItemCategory] = useState("");
   const [editItemPinned, setEditItemPinned] = useState(false);
   const [editItemHidden, setEditItemHidden] = useState(false);
+  const [isCreateChoreModalOpen, setIsCreateChoreModalOpen] = useState(false);
+  const [itemRequiresInput, setItemRequiresInput] = useState(false);
+  const [itemInputLabel, setItemInputLabel] = useState("");
+  const [editItemRequiresInput, setEditItemRequiresInput] = useState(false);
+  const [editItemInputLabel, setEditItemInputLabel] = useState("");
 
   const startEditingItem = (item: MarketItem) => {
     setEditingItemId(item.id);
@@ -118,6 +126,8 @@ export default function ParentDashboard({
     setEditItemDesc(item.description);
     setEditItemCost(item.points);
     setEditItemImage(item.image);
+    setEditItemRequiresInput(item.requiresInput || false);
+    setEditItemInputLabel(item.inputLabel || "");
     setEditItemStock(item.stock);
     setEditItemCategory(item.category || "");
     setEditItemPinned(!!item.pinned);
@@ -181,9 +191,10 @@ export default function ParentDashboard({
       const uploadedUrl = await uploadImageToImgbb(compressedBase64);
       if (uploadedUrl) {
         setEditItemImage(uploadedUrl);
-        showAlert("Успешно 🎉", "Изображение успешно сжато и загружено на сервер!");
+        showAlert("Успешно 🎉", "Изображение успешно загружено на сервер!");
       } else {
-        showAlert("Ошибка", "Не удалось загрузить изображение. Пожалуйста, попробуйте еще раз.");
+        setEditItemImage(compressedBase64); // Fallback to base64
+        showAlert("Предупреждение", "Загрузка на сервер не удалась, но изображение сохранено локально!");
       }
     } catch (err) {
       console.error("Failed to compress or upload image:", err);
@@ -292,7 +303,13 @@ export default function ParentDashboard({
         // Send Telegram notification
         if (settings.telegramChatId) {
           await sendTelegramNotification(
-            `⚡ <b>Новое задание!</b>\nКому: ${kid.name} ${kid.avatar}\nЗадание: <b>${newChore.title}</b>\nОписание: ${newChore.description}\nНаграда: 🪙 <b>${newChore.points} баллов</b>\n\n<i>Время на принятие: 30 минут! Время на выполнение: ${newChore.executionLimitMinutes || 60} минут!</i>`,
+            `⚡ <b>Новое задание!</b>
+Кому: ${kid.name} ${kid.avatar}
+Задание: <b>${newChore.title}</b>
+Описание: ${newChore.description}
+Награда: 🪙 <b>${newChore.points} баллов</b>
+
+<i>Время на принятие: 30 минут! Время на выполнение: ${newChore.executionLimitMinutes || 60} минут!</i>`,
             settings.telegramChatId
           );
         }
@@ -300,7 +317,12 @@ export default function ParentDashboard({
         // Send direct Telegram notification to Kid
         if (kid.telegramChatId) {
           await sendTelegramNotification(
-            `⚡ <b>Новый квест для тебя!</b>\nКвест: <b>${newChore.title}</b>\nОписание: ${newChore.description}\nНаграда: 🪙 <b>${newChore.points} монет</b>\n\n<i>Прими его в работу в течение 30 минут! Время на выполнение: ${newChore.executionLimitMinutes || 60} минут! Удачи! 🚀</i>`,
+            `⚡ <b>Новый квест для тебя!</b>
+Квест: <b>${newChore.title}</b>
+Описание: ${newChore.description}
+Награда: 🪙 <b>${newChore.points} монет</b>
+
+<i>Прими его в работу в течение 30 минут! Время на выполнение: ${newChore.executionLimitMinutes || 60} минут! Удачи! 🚀</i>`,
             kid.telegramChatId
           );
         }
@@ -377,7 +399,11 @@ export default function ParentDashboard({
       // Send Telegram notification
       if (settings.telegramChatId) {
         await sendTelegramNotification(
-          `✅ <b>Задание одобрено!</b>\nРебенок: ${kid.name} ${kid.avatar}\nКвест: <b>${chore.title}</b>\nНачислено: 🪙 <b>${pointsToAward} баллов</b> (из ${chore.points})\nОтзыв: "${feedback}"`,
+          `✅ <b>Задание одобрено!</b>
+Ребенок: ${kid.name} ${kid.avatar}
+Квест: <b>${chore.title}</b>
+Начислено: 🪙 <b>${pointsToAward} баллов</b> (из ${chore.points})
+Отзыв: "${feedback}"`,
           settings.telegramChatId
         );
       }
@@ -385,7 +411,12 @@ export default function ParentDashboard({
       // Send direct Telegram notification to Kid
       if (kid.telegramChatId) {
         await sendTelegramNotification(
-          `🎉 <b>Твой квест одобрен родителями!</b>\nКвест: <b>${chore.title}</b>\nТебе начислено: 🪙 <b>${pointsToAward} монет!</b>\nОтзыв родителя: "${feedback}"\n\nТвой новый баланс: 🪙 <b>${newBalance} монет!</b> Поздравляем! 🥳`,
+          `🎉 <b>Твой квест одобрен родителями!</b>
+Квест: <b>${chore.title}</b>
+Тебе начислено: 🪙 <b>${pointsToAward} монет!</b>
+Отзыв родителя: "${feedback}"
+
+Твой новый баланс: 🪙 <b>${newBalance} монет!</b> Поздравляем! 🥳`,
           kid.telegramChatId
         );
       }
@@ -415,7 +446,12 @@ export default function ParentDashboard({
 
       if (settings.telegramChatId) {
         await sendTelegramNotification(
-          `❌ <b>Задание отклонено!</b>\nРебенок: ${kid.name} ${kid.avatar}\nКвест: <b>${chore.title}</b>\nПричина: "${feedback}"\n\n<i>Задание возвращено на доработку.</i>`,
+          `❌ <b>Задание отклонено!</b>
+Ребенок: ${kid.name} ${kid.avatar}
+Квест: <b>${chore.title}</b>
+Причина: "${feedback}"
+
+<i>Задание возвращено на доработку.</i>`,
           settings.telegramChatId
         );
       }
@@ -423,7 +459,11 @@ export default function ParentDashboard({
       // Send direct Telegram notification to Kid
       if (kid.telegramChatId) {
         await sendTelegramNotification(
-          `⚠️ <b>Твой квест отклонен родителями!</b>\nКвест: <b>${chore.title}</b>\nПричина: "${feedback}"\n\n<i>Пожалуйста, исправь недочеты и отправь отчет заново! У тебя всё получится! 💪</i>`,
+          `⚠️ <b>Твой квест отклонен родителями!</b>
+Квест: <b>${chore.title}</b>
+Причина: "${feedback}"
+
+<i>Пожалуйста, исправь недочеты и отправь отчет заново! У тебя всё получится! 💪</i>`,
           kid.telegramChatId
         );
       }
@@ -488,6 +528,8 @@ export default function ParentDashboard({
       setItemCategory("");
       setItemPinned(false);
       setItemHidden(false);
+      setItemRequiresInput(false);
+      setItemInputLabel("");
       showAlert("Успешно", "Товар успешно добавлен в магазин!");
     } catch (err) {
       console.error("Failed to create market item:", err);
@@ -571,7 +613,10 @@ export default function ParentDashboard({
 
       if (settings.telegramChatId) {
         await sendTelegramNotification(
-          `🎁 <b>Награда выдана ребенку!</b>\nКому: ${purchase.kidName}\nПриз: <b>${purchase.productTitle}</b>\nСтатус: <b>Вручено лично в руки!</b>`,
+          `🎁 <b>Награда выдана ребенку!</b>
+Кому: ${purchase.kidName}
+Приз: <b>${purchase.productTitle}</b>
+Статус: <b>Вручено лично в руки!</b>`,
           settings.telegramChatId
         );
       }
@@ -580,7 +625,10 @@ export default function ParentDashboard({
       const kid = kids.find(k => k.id === purchase.kidId);
       if (kid && kid.telegramChatId) {
         await sendTelegramNotification(
-          `🎁 <b>Ура! Твой приз выдан родителями!</b>\nНазвание: <b>${purchase.productTitle}</b>\n\n<i>Родители вручили тебе твой заслуженный приз! Пользуйся с удовольствием! 🥰</i>`,
+          `🎁 <b>Ура! Твой приз выдан родителями!</b>
+Название: <b>${purchase.productTitle}</b>
+
+<i>Родители вручили тебе твой заслуженный приз! Пользуйся с удовольствием! 🥰</i>`,
           kid.telegramChatId
         );
       }
@@ -754,156 +802,19 @@ export default function ParentDashboard({
       {view === "chores" && (
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
           {/* New Chore creator */}
-          <div className="xl:col-span-1 p-5 bg-white border border-slate-100 rounded-3xl shadow-sm space-y-4">
-            <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
-              <Sparkles className="w-4.5 h-4.5 text-amber-500" />
-              Раздать новое задание
-            </h3>
-
-            {/* Quick Presets */}
-            <div className="space-y-1.5">
-              <label className="block text-[10px] font-bold text-slate-400 uppercase">Шаблоны быстрых дел</label>
-              <div className="flex flex-wrap gap-1.5">
-                {DEFAULT_CHORE_PRESETS.map(preset => (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    onClick={() => handleApplyPreset(preset)}
-                    className="py-1 px-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-xl text-[10px] font-semibold transition-all cursor-pointer"
-                  >
-                    {preset.title}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <form onSubmit={handleCreateChore} className="space-y-3 pt-2">
-              <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase">Название квеста</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Вытереть пыль в зале"
-                  value={choreTitle}
-                  onChange={(e) => setChoreTitle(e.target.value)}
-                  className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase">Инструкция (описание)</label>
-                <textarea
-                  rows={2}
-                  placeholder="Протереть все поверхности, используя тряпку из микрофибры..."
-                  value={choreDesc}
-                  onChange={(e) => setChoreDesc(e.target.value)}
-                  className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase">Цена (баллы 🪙)</label>
-                  <input
-                    type="number"
-                    min={1}
-                    required
-                    value={chorePoints}
-                    onChange={(e) => setChorePoints(Number(e.target.value))}
-                    className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase">Лимит принятия</label>
-                  <div className="w-full mt-1 p-2.5 bg-slate-100 text-slate-500 rounded-xl text-xs font-bold select-none border border-slate-200">
-                    ⏱️ 30 минут
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase">Время на выполнение</label>
-                <select
-                  value={choreExecutionLimit}
-                  onChange={(e) => setChoreExecutionLimit(Number(e.target.value))}
-                  className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
-                >
-                  <option value={15}>⏱️ 15 минут</option>
-                  <option value={30}>⏱️ 30 минут</option>
-                  <option value={45}>⏱️ 45 минут</option>
-                  <option value={60}>⏱️ 1 час (60 мин)</option>
-                  <option value={120}>⏱️ 2 часа (120 мин)</option>
-                  <option value={180}>⏱️ 3 часа (180 мин)</option>
-                  <option value={1440}>⏱️ 1 сутки (24 часа)</option>
-                </select>
-              </div>
-
-              <div className="flex items-center gap-2 mt-2 bg-rose-50 p-3 rounded-xl border border-rose-100">
-                <input
-                  type="checkbox"
-                  id="urgent"
-                  checked={choreUrgent}
-                  onChange={(e) => setChoreUrgent(e.target.checked)}
-                  className="w-4 h-4 text-rose-500 rounded focus:ring-rose-500 cursor-pointer accent-rose-500"
-                />
-                <label htmlFor="urgent" className="text-xs font-black text-rose-600 uppercase cursor-pointer select-none">
-                  ⚡ Срочное задание (Награда X2, Время /2)
-                </label>
-              </div>
-
-              <div>
-                <div className="flex justify-between items-center mb-1.5">
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase">Кому поручить задание?</label>
-                  {kids.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (selectedKids.length === kids.length) {
-                          setSelectedKids([]);
-                        } else {
-                          setSelectedKids(kids.map(k => k.id));
-                        }
-                      }}
-                      className={`text-[9px] font-bold uppercase transition-colors cursor-pointer ${
-                        selectedKids.length === kids.length ? "text-rose-500 hover:text-rose-600" : "text-indigo-500 hover:text-indigo-600"
-                      }`}
-                    >
-                      {selectedKids.length === kids.length ? "Снять выбор" : "Выбрать всех"}
-                    </button>
-                  )}
-                </div>
-                {kids.length === 0 ? (
-                  <p className="text-[10px] text-rose-500 font-bold mt-1">Добавьте детей в панели настроек!</p>
-                ) : (
-                  <div className="flex gap-2 mt-1.5 flex-wrap">
-                    {kids.map(k => (
-                      <button
-                        key={k.id}
-                        type="button"
-                        onClick={() => handleToggleKid(k.id)}
-                        className={`py-1.5 px-3 rounded-xl border text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-                          selectedKids.includes(k.id)
-                            ? `${palette.border} bg-amber-50/40 ${palette.text}`
-                            : "border-slate-200 text-slate-500 hover:bg-slate-50"
-                        }`}
-                      >
-                        <span className="text-base">{k.avatar}</span>
-                        <span>{k.name}</span>
-                        {selectedKids.includes(k.id) && <Check className="w-3.5 h-3.5" />}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading || selectedKids.length === 0}
-                className={`w-full py-3 mt-2 ${palette.bg} ${palette.hover} text-white text-xs font-bold rounded-2xl shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer`}
-              >
-                Отправить задание детям 🚀
-              </button>
-            </form>
+          <div className="flex justify-between items-center bg-white p-5 rounded-3xl border border-slate-100 shadow-sm col-span-1 xl:col-span-3">
+             <div>
+               <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
+                 <Award className="w-4.5 h-4.5 text-indigo-500" />
+                 Все выданные задания
+               </h3>
+             </div>
+             <button
+               onClick={() => setIsCreateChoreModalOpen(true)}
+               className={`px-4 py-3 ${palette.bg} ${palette.hover} text-white rounded-xl text-xs font-bold transition-all shadow-sm cursor-pointer flex items-center gap-2`}
+             >
+               <Plus className="w-4 h-4" /> Добавить задание
+             </button>
           </div>
 
           {/* Active / Submitted Chores panel */}
@@ -975,14 +886,14 @@ export default function ParentDashboard({
 
             {/* Active & Pending chores */}
             <div>
-              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Активные задания в процессе ({chores.filter(c => c.status === "accepted" || c.status === "pending" || c.status === "rejected").length})</h4>
-              {chores.filter(c => c.status === "accepted" || c.status === "pending" || c.status === "rejected").length === 0 ? (
+              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Активные и Отмененные задания ({chores.filter(c => c.status === "accepted" || c.status === "pending" || c.status === "rejected" || c.status === "declined").length})</h4>
+              {chores.filter(c => c.status === "accepted" || c.status === "pending" || c.status === "rejected" || c.status === "declined").length === 0 ? (
                 <div className="p-8 text-center bg-slate-50 border border-dashed border-slate-200 rounded-2xl text-xs text-slate-400 font-medium">
                   Нет активных заданий. Поручите новое!
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {chores.filter(c => c.status === "accepted" || c.status === "pending" || c.status === "rejected").map((chore) => {
+                  {chores.filter(c => c.status === "accepted" || c.status === "pending" || c.status === "rejected" || c.status === "declined").map((chore) => {
                     const kid = kids.find(k => k.id === chore.assignedTo[0]);
                     return (
                       <div 
@@ -1137,6 +1048,33 @@ export default function ParentDashboard({
                   />
                 </div>
               </div>
+
+              
+              <div className="flex items-center gap-2 mt-2 bg-indigo-50 p-3 rounded-xl border border-indigo-100">
+                <input
+                  type="checkbox"
+                  id="requiresInput"
+                  checked={itemRequiresInput}
+                  onChange={(e) => setItemRequiresInput(e.target.checked)}
+                  className="w-4 h-4 text-indigo-500 rounded focus:ring-indigo-500 cursor-pointer accent-indigo-500"
+                />
+                <label htmlFor="requiresInput" className="text-xs font-bold text-indigo-600 uppercase cursor-pointer select-none">
+                  Требовать ввод данных при покупке (например, номер карты)
+                </label>
+              </div>
+              {itemRequiresInput && (
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase">Текст над полем ввода</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Введите номер карты"
+                    value={itemInputLabel}
+                    onChange={(e) => setItemInputLabel(e.target.value)}
+                    className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="block text-[10px] font-bold text-slate-400 uppercase text-rose-500">Скидка по акции % (1-99)</label>
@@ -1611,6 +1549,12 @@ export default function ParentDashboard({
                         <div className="text-[10px] text-slate-400 font-medium">
                           Списано: <span className="font-bold text-amber-600">🪙 {pur.points} баллов</span>
                         </div>
+                        {pur.customInput && (
+                          <div className="mt-1.5 p-2 bg-indigo-50 border border-indigo-100 rounded-lg">
+                            <span className="block text-[8px] font-black text-indigo-400 uppercase">Введенные данные:</span>
+                            <span className="text-xs font-semibold text-slate-700">{pur.customInput}</span>
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -1705,6 +1649,185 @@ export default function ParentDashboard({
         </div>
       )}
 
+      {/* Create Chore Modal */}
+      <AnimatePresence>
+        {isCreateChoreModalOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white rounded-3xl overflow-hidden max-w-lg w-full shadow-2xl border border-slate-100 flex flex-col max-h-[90vh]"
+            >
+              <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+                <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
+                  <Sparkles className="w-4.5 h-4.5 text-amber-500" />
+                  Раздать новое задание
+                </h3>
+                <button
+                   onClick={() => setIsCreateChoreModalOpen(false)}
+                   className="p-1.5 hover:bg-slate-200 text-slate-400 hover:text-slate-700 rounded-lg text-xs font-bold"
+                >
+                  Закрыть
+                </button>
+              </div>
+              <div className="p-5 overflow-y-auto">
+          <div className="xl:col-span-1 p-5 bg-white border border-slate-100 rounded-3xl shadow-sm space-y-4">
+            <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
+              <Sparkles className="w-4.5 h-4.5 text-amber-500" />
+              Раздать новое задание
+            </h3>
+
+            {/* Quick Presets */}
+            <div className="space-y-1.5">
+              <label className="block text-[10px] font-bold text-slate-400 uppercase">Шаблоны быстрых дел</label>
+              <div className="flex flex-wrap gap-1.5">
+                {DEFAULT_CHORE_PRESETS.map(preset => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => handleApplyPreset(preset)}
+                    className="py-1 px-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-xl text-[10px] font-semibold transition-all cursor-pointer"
+                  >
+                    {preset.title}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <form onSubmit={handleCreateChore} className="space-y-3 pt-2">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase">Название квеста</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Вытереть пыль в зале"
+                  value={choreTitle}
+                  onChange={(e) => setChoreTitle(e.target.value)}
+                  className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase">Инструкция (описание)</label>
+                <textarea
+                  rows={2}
+                  placeholder="Протереть все поверхности, используя тряпку из микрофибры..."
+                  value={choreDesc}
+                  onChange={(e) => setChoreDesc(e.target.value)}
+                  className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase">Цена (баллы 🪙)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    required
+                    value={chorePoints}
+                    onChange={(e) => setChorePoints(Number(e.target.value))}
+                    className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase">Лимит принятия</label>
+                  <div className="w-full mt-1 p-2.5 bg-slate-100 text-slate-500 rounded-xl text-xs font-bold select-none border border-slate-200">
+                    ⏱️ 30 минут
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase">Время на выполнение</label>
+                <select
+                  value={choreExecutionLimit}
+                  onChange={(e) => setChoreExecutionLimit(Number(e.target.value))}
+                  className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                >
+                  <option value={15}>⏱️ 15 минут</option>
+                  <option value={30}>⏱️ 30 минут</option>
+                  <option value={45}>⏱️ 45 минут</option>
+                  <option value={60}>⏱️ 1 час (60 мин)</option>
+                  <option value={120}>⏱️ 2 часа (120 мин)</option>
+                  <option value={180}>⏱️ 3 часа (180 мин)</option>
+                  <option value={1440}>⏱️ 1 сутки (24 часа)</option>
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2 mt-2 bg-rose-50 p-3 rounded-xl border border-rose-100">
+                <input
+                  type="checkbox"
+                  id="urgent"
+                  checked={choreUrgent}
+                  onChange={(e) => setChoreUrgent(e.target.checked)}
+                  className="w-4 h-4 text-rose-500 rounded focus:ring-rose-500 cursor-pointer accent-rose-500"
+                />
+                <label htmlFor="urgent" className="text-xs font-black text-rose-600 uppercase cursor-pointer select-none">
+                  ⚡ Срочное задание (Награда X2, Время /2)
+                </label>
+              </div>
+
+              <div>
+                <div className="flex justify-between items-center mb-1.5">
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase">Кому поручить задание?</label>
+                  {kids.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (selectedKids.length === kids.length) {
+                          setSelectedKids([]);
+                        } else {
+                          setSelectedKids(kids.map(k => k.id));
+                        }
+                      }}
+                      className={`text-[9px] font-bold uppercase transition-colors cursor-pointer ${
+                        selectedKids.length === kids.length ? "text-rose-500 hover:text-rose-600" : "text-indigo-500 hover:text-indigo-600"
+                      }`}
+                    >
+                      {selectedKids.length === kids.length ? "Снять выбор" : "Выбрать всех"}
+                    </button>
+                  )}
+                </div>
+                {kids.length === 0 ? (
+                  <p className="text-[10px] text-rose-500 font-bold mt-1">Добавьте детей в панели настроек!</p>
+                ) : (
+                  <div className="flex gap-2 mt-1.5 flex-wrap">
+                    {kids.map(k => (
+                      <button
+                        key={k.id}
+                        type="button"
+                        onClick={() => handleToggleKid(k.id)}
+                        className={`py-1.5 px-3 rounded-xl border text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                          selectedKids.includes(k.id)
+                            ? `${palette.border} bg-amber-50/40 ${palette.text}`
+                            : "border-slate-200 text-slate-500 hover:bg-slate-50"
+                        }`}
+                      >
+                        <span className="text-base">{k.avatar}</span>
+                        <span>{k.name}</span>
+                        {selectedKids.includes(k.id) && <Check className="w-3.5 h-3.5" />}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading || selectedKids.length === 0}
+                className={`w-full py-3 mt-2 ${palette.bg} ${palette.hover} text-white text-xs font-bold rounded-2xl shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer`}
+              >
+                Отправить задание детям 🚀
+              </button>
+            </form>
+          </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
       {/* FULL SCREEN REVIEW CHORE DIALOG (MODAL) */}
       <AnimatePresence>
         {reviewChore && (

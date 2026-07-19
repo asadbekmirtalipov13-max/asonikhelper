@@ -41,6 +41,7 @@ export interface Chore {
   proofPhoto?: string; // URL from IMGBB
   parentFeedback?: string; // Feedback from parent on approval/rejection
   isUrgent?: boolean;
+  urgentNotified?: boolean;
   finalPoints?: number; // Actual points awarded by parent
   executionLimitMinutes?: number; // Completion time limit set by parent (defaults to 60)
 }
@@ -60,6 +61,8 @@ export interface MarketItem {
   sortOrder?: number; // For manual ordering
   discountPercentage?: number; // 1-99%
   discountUntil?: any; // Timestamp when sale ends
+  requiresInput?: boolean;
+  inputLabel?: string;
 }
 
 export interface Purchase {
@@ -73,6 +76,7 @@ export interface Purchase {
   status: "pending" | "issued"; // 'pending' in progress, 'issued' handed over
   createdAt: any;
   issuedAt?: any;
+  customInput?: string;
 }
 
 export interface Transaction {
@@ -93,4 +97,16 @@ export interface SiteSettings {
   telegramChatId: string;
   chestImageUrl?: string; // Customizable image URL or fallback emoji
   categories?: string[]; // Custom store categories
+  faqs?: { id: string; question: string; answer: string }[];
+}
+
+export interface AppNotification {
+  id: string;
+  kidId: string;
+  title: string;
+  text: string;
+  createdAt: any;
+  read: boolean;
+  type?: "message" | "chest" | "quest" | "system";
+  chestPoints?: number;
 }

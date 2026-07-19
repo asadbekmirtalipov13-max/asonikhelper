@@ -5,6 +5,7 @@ import {
 import { db, auth, handleFirestoreError, OperationType } from "./firebase";
 import { FamilyUser, Chore, MarketItem, Purchase, SiteSettings, Transaction } from "./types";
 import { TAILWIND_COLOR_PALETTES } from "./presets";
+import { sendTelegramNotification } from "./utils/telegram";
 import LoginScreen from "./components/LoginScreen";
 import ParentDashboard from "./components/ParentDashboard";
 import KidDashboard from "./components/KidDashboard";
@@ -24,6 +25,7 @@ export default function App() {
   const [marketItems, setMarketItems] = useState<MarketItem[]>([]);
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [notifications, setNotifications] = useState<any[]>([]);
   const [settings, setSettings] = useState<SiteSettings>({
     title: "Семейный Маркетплейс и Квесты",
     logo: "🏪",
@@ -133,6 +135,22 @@ export default function App() {
       handleFirestoreError(error, OperationType.LIST, "transactions");
     });
 
+    
+    const unsubNotifications = onSnapshot(collection(db, "notifications"), (snapshot) => {
+      const nList: any[] = [];
+      snapshot.forEach((doc) => {
+        nList.push({ id: doc.id, ...doc.data() });
+      });
+      nList.sort((a, b) => {
+        const timeA = a.createdAt?.seconds || a.createdAt?.getTime?.() || 0;
+        const timeB = b.createdAt?.seconds || b.createdAt?.getTime?.() || 0;
+        return timeB - timeA;
+      });
+      setNotifications(nList);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, "notifications");
+    });
+
     return () => {
       unsubSettings();
       unsubUsers();
@@ -140,6 +158,8 @@ export default function App() {
       unsubMarket();
       unsubPurchases();
       unsubTransactions();
+      unsubNotifications();
+      if(typeof unsubNotifications !== "undefined") unsubNotifications();
     };
   }, []);
 
@@ -259,9 +279,47 @@ export default function App() {
     }
   };
 
+  // Telegram Urgent notifications cron
+  useEffect(() => {
+    if (!settings.telegramChatId || chores.length === 0) return;
+    
+    const interval = setInterval(async () => {
+      const now = new Date();
+      for (const chore of chores) {
+        if (chore.status !== "accepted") continue;
+        if (!chore.isUrgent) continue;
+        if (!chore.acceptedAt || !chore.executionLimitMinutes) continue;
+        
+        const deadline = new Date(chore.acceptedAt.toDate ? chore.acceptedAt.toDate().getTime() + chore.executionLimitMinutes * 60000 : new Date(chore.acceptedAt).getTime() + chore.executionLimitMinutes * 60000);
+        
+        const timeRemainingMs = deadline.getTime() - now.getTime();
+        
+        // Notify if < 5 minutes remaining and not yet notified
+        if (timeRemainingMs > 0 && timeRemainingMs <= 5 * 60000 && !chore.urgentNotified) {
+          // Send notification
+          try {
+            await sendTelegramNotification(
+              `⚠️ <b>ВНИМАНИЕ! СРОЧНОЕ ЗАДАНИЕ!</b>\nКвест <b>${chore.title}</b> скоро провалится!\nОсталось менее 5 минут!\nПоторопитесь!`,
+              settings.telegramChatId
+            );
+            // mark notified
+            await updateDoc(doc(db, "chores", chore.id), { urgentNotified: true });
+          } catch(err) {
+            console.error("Failed to send urgent warning:", err);
+          }
+        }
+      }
+    }, 60000); // check every minute
+    
+    return () => clearInterval(interval);
+  }, [chores, settings.telegramChatId]);
+
   if (dbLoading && !currentUser) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-[#F4F7FE]">
+    
+  
+
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center bg-[#F4F7FE]">
         <div className="flex flex-col items-center gap-3">
           <div className="w-12 h-12 rounded-2xl bg-indigo-100 flex items-center justify-center text-3xl animate-bounce">
             🏪
@@ -425,7 +483,7 @@ export default function App() {
                 chores={chores}
                 marketItems={marketItems}
                 purchases={purchases}
-                transactions={transactions}
+                transactions={transactions} notifications={notifications}
                 settings={settings}
                 primaryColor={settings.primaryColor}
                 showAlert={showAlert}
@@ -450,7 +508,7 @@ export default function App() {
                 chores={chores}
                 marketItems={marketItems}
                 purchases={purchases}
-                transactions={transactions}
+                transactions={transactions} notifications={notifications}
                 settings={settings}
                 primaryColor={settings.primaryColor}
                 showAlert={showAlert}

@@ -3,7 +3,7 @@ import { FamilyUser, SiteSettings } from "../types";
 import { db } from "../firebase";
 import { doc, setDoc, updateDoc, deleteDoc, collection, getDocs, writeBatch } from "firebase/firestore";
 import { 
-  Users, Bot, Palette, Plus, Trash2, RefreshCw, 
+  Users, Bot, Palette, Plus, Trash2, RefreshCw, Bell, Sparkles, HelpCircle, 
   Check, Save, ArrowRight, UserPlus, Settings2, Info, Compass, Pencil, Image, Upload, Tag, X
 } from "lucide-react";
 import { motion } from "motion/react";
@@ -25,7 +25,7 @@ interface AdminPanelProps {
 }
 
 export default function AdminPanel({ currentUser, users, settings, onUpdateSettings, primaryColor, showAlert, showConfirm }: AdminPanelProps) {
-  const [activeTab, setActiveTab] = useState<"users" | "telegram" | "branding" | "system">("users");
+  const [activeTab, setActiveTab] = useState<"users" | "telegram" | "branding" | "system" | "notifications" | "faq" | "categories">("users");
   const [loading, setLoading] = useState(false);
   
   // Create user form state
@@ -49,6 +49,93 @@ export default function AdminPanel({ currentUser, users, settings, onUpdateSetti
   const [logoUploading, setLogoUploading] = useState(false);
   const logoInputRef = useRef<HTMLInputElement>(null);
   const [chestUploading, setChestUploading] = useState(false);
+  
+  const [faqs, setFaqs] = useState(settings.faqs || [
+    { id: "1", question: "Как получить монеты?", answer: "Выполняйте квесты, которые выдают родители, и отмечайтесь каждый день в календаре!" }
+  ]);
+  
+  const handleAddFaq = () => {
+    setFaqs([...faqs, { id: Math.random().toString(), question: "Новый вопрос?", answer: "Ответ на вопрос..." }]);
+  };
+  
+  const handleUpdateFaq = (id, field, value) => {
+    setFaqs(faqs.map(f => f.id === id ? { ...f, [field]: value } : f));
+  };
+  
+  const handleRemoveFaq = (id) => {
+    setFaqs(faqs.filter(f => f.id !== id));
+  };
+  
+  const handleSaveFaqs = async () => {
+    setLoading(true);
+    try {
+      await updateDoc(doc(db, "settings", "global"), { faqs });
+      onUpdateSettings({ faqs });
+      showAlert("Сохранено", "FAQ успешно обновлен.");
+    } catch(err) {
+      showAlert("Ошибка", "Не удалось сохранить FAQ.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  
+  const [notifTarget, setNotifTarget] = useState<string>("all");
+  const [notifType, setNotifType] = useState<"message" | "chest">("message");
+  const [notifText, setNotifText] = useState("");
+  const [notifChestPoints, setNotifChestPoints] = useState(10);
+  
+  const handleSendNotification = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!notifText.trim() && notifType !== "chest") return;
+    
+    setLoading(true);
+    try {
+      const targets = notifTarget === "all" ? users.filter(u => u.role === "kid") : users.filter(u => u.id === notifTarget);
+      if (targets.length === 0) {
+         showAlert("Ошибка", "Нет детей для отправки!");
+         setLoading(false);
+         return;
+      }
+      
+      const batch = writeBatch(db);
+      
+      for (const kid of targets) {
+        const notifRef = doc(collection(db, "notifications"));
+        batch.set(notifRef, {
+          kidId: kid.id,
+          type: notifType,
+          title: notifType === "chest" ? "🎁 Вам отправлен СУНДУК!" : "💬 Сообщение от родителей",
+          text: notifText.trim() || (notifType === "chest" ? "Откройте сундук, чтобы забрать монеты!" : ""),
+          chestPoints: notifType === "chest" ? Number(notifChestPoints) : 0,
+          createdAt: new Date(),
+          read: false
+        });
+      }
+      
+      await batch.commit();
+      
+      if (settings.telegramChatId) {
+        let tgMsg = `📢 <b>Новое уведомление детям!</b>\nКому: ${notifTarget === "all" ? "Всем детям" : targets[0].name}\n`;
+        if (notifType === "chest") {
+           tgMsg += `Подарок: 🎁 Сундук с ${notifChestPoints} монетами!\n`;
+        }
+        if (notifText.trim()) {
+           tgMsg += `Сообщение: <i>${notifText}</i>`;
+        }
+        await sendTelegramNotification(tgMsg, settings.telegramChatId);
+      }
+      
+      showAlert("Успешно!", "Уведомления/сундуки отправлены!");
+      setNotifText("");
+    } catch(err) {
+      console.error(err);
+      showAlert("Ошибка", "Не удалось отправить: " + err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const chestInputRef = useRef<HTMLInputElement>(null);
 
   const isPrimaryAdmin = currentUser.email?.toLowerCase() === "asadbekmirtalipov13@gmail.com";
