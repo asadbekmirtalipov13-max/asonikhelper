@@ -1,0 +1,10 @@
+{
+  "name": "Семейный Маркетплейс и Квесты",
+  "description": "Платформа для распределения домашних дел между братьями, начисления баллов за выполненную работу и обмена их на призы и привилегии.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -1,0 +1,201 @@
+{
+  "entities": {
+    "SiteSettings": {
+      "title": "SiteSettings",
+      "description": "Global application branding and integrations settings.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "The title of the site."
+        },
+        "logo": {
+          "type": "string",
+          "description": "The logo emoji for the site."
+        },
+        "primaryColor": {
+          "type": "string",
+          "description": "The primary tailwind color theme key."
+        },
+        "telegramChatId": {
+          "type": "string",
+          "description": "Optional Telegram chat ID for notifications."
+        }
+      },
+      "required": ["title", "logo", "primaryColor"]
+    },
+    "FamilyUser": {
+      "title": "FamilyUser",
+      "description": "A user profile within the family workspace.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The unique identifier of the user."
+        },
+        "email": {
+          "type": "string",
+          "description": "The email of the user."
+        },
+        "name": {
+          "type": "string",
+          "description": "The name of the user."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "parent", "kid"],
+          "description": "The authorization role of the user."
+        },
+        "avatar": {
+          "type": "string",
+          "description": "The user's representative avatar emoji."
+        },
+        "points": {
+          "type": "number",
+          "description": "The current point balance of the user."
+        },
+        "dailyStreak": {
+          "type": "number",
+          "description": "The current daily streak multiplier."
+        },
+        "lastCheckIn": {
+          "type": "string",
+          "description": "The ISO string of the user's last streak check-in."
+        }
+      },
+      "required": ["id", "name", "role", "avatar", "points"]
+    },
+    "Chore": {
+      "title": "Chore",
+      "description": "A quest or chore created by parents for kids.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the chore."
+        },
+        "title": {
+          "type": "string",
+          "description": "The title or action of the chore."
+        },
+        "description": {
+          "type": "string",
+          "description": "Detailed description of requirements."
+        },
+        "points": {
+          "type": "number",
+          "description": "Points rewarded upon verification."
+        },
+        "assignedTo": {
+          "type": "string",
+          "description": "User ID of the kid assigned."
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "User ID of the parent creator."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "completed", "verified"],
+          "description": "Current workflow status of the chore."
+        }
+      },
+      "required": ["id", "title", "points", "assignedTo", "createdBy", "status"]
+    },
+    "MarketItem": {
+      "title": "MarketItem",
+      "description": "An item or reward listed in the marketplace.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the item."
+        },
+        "title": {
+          "type": "string",
+          "description": "Title of the reward."
+        },
+        "description": {
+          "type": "string",
+          "description": "Detailed description."
+        },
+        "points": {
+          "type": "number",
+          "description": "Point price to redeem the reward."
+        },
+        "stock": {
+          "type": "number",
+          "description": "Stock count remaining. 0 indicates unlimited."
+        },
+        "image": {
+          "type": "string",
+          "description": "An emoji representation of the reward."
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "User ID of the creator."
+        }
+      },
+      "required": ["id", "title", "points", "stock", "image", "createdBy"]
+    },
+    "Purchase": {
+      "title": "Purchase",
+      "description": "A record of a reward redeemed by a kid.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the purchase."
+        },
+        "itemId": {
+          "type": "string",
+          "description": "ID of the marketplace item."
+        },
+        "itemTitle": {
+          "type": "string",
+          "description": "Title of the item at purchase time."
+        },
+        "points": {
+          "type": "number",
+          "description": "The cost of the purchase in points."
+        },
+        "buyerId": {
+          "type": "string",
+          "description": "User ID of the kid who purchased."
+        },
+        "buyerName": {
+          "type": "string",
+          "description": "Name of the buyer."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "delivered"],
+          "description": "Order fulfillment status."
+        }
+      },
+      "required": ["id", "itemId", "itemTitle", "points", "buyerId", "buyerName", "status"]
+    }
+  },
+  "firestore": {
+    "settings/{settingId}": {
+      "schema": { "$ref": "SiteSettings" },
+      "description": "Site-wide configuration and integration parameters."
+    },
+    "users/{userId}": {
+      "schema": { "$ref": "FamilyUser" },
+      "description": "Family user profiles."
+    },
+    "chores/{choreId}": {
+      "schema": { "$ref": "Chore" },
+      "description": "List of chores and quests."
+    },
+    "marketplace/{itemId}": {
+      "schema": { "$ref": "MarketItem" },
+      "description": "Available market reward listings."
+    },
+    "purchases/{purchaseId}": {
+      "schema": { "$ref": "Purchase" },
+      "description": "Redeemed rewards records."
+    }
+  }
+}
