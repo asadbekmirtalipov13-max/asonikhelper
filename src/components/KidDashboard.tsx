@@ -44,9 +44,12 @@ export default function KidDashboard({
   setActiveTab: externalSetActiveTab
 }: KidDashboardProps) {
   const [internalActiveTab, setInternalActiveTab] = useState<"quests" | "store" | "daily" | "profile">("quests");
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   
   // Games state
   const [rpsChoice, setRpsChoice] = useState<"rock" | "paper" | "scissors" | null>(null);
+  const [activeGame, setActiveGame] = useState<"rps" | "coin" | null>(null);
+  const [gameBet, setGameBet] = useState(10);
   const [rpsResult, setRpsResult] = useState<{player: string, bot: string, outcome: string, amount: number} | null>(null);
   const [rpsLoading, setRpsLoading] = useState(false);
   const [coinChoice, setCoinChoice] = useState<"heads" | "tails" | null>(null);
@@ -56,6 +59,8 @@ export default function KidDashboard({
   const setActiveTab = externalSetActiveTab !== undefined ? externalSetActiveTab : setInternalActiveTab;
 
   const [loading, setLoading] = useState(false);
+  const [openingChest, setOpeningChest] = useState<any>(null);
+  const [processingOrder, setProcessingOrder] = useState<any>(null);
   const [now, setNow] = useState(new Date());
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string>("");
@@ -352,6 +357,7 @@ export default function KidDashboard({
       console.error("Daily checkin failed:", err);
     } finally {
       setLoading(false);
+      setProcessingOrder(null);
     }
   };
 
@@ -420,6 +426,7 @@ export default function KidDashboard({
       showAlert("Ошибка", "Не удалось восстановить серию. Попробуйте еще раз.");
     } finally {
       setLoading(false);
+      setProcessingOrder(null);
     }
   };
 
@@ -436,6 +443,7 @@ export default function KidDashboard({
       console.error("Reset streak failed:", err);
     } finally {
       setLoading(false);
+      setProcessingOrder(null);
     }
   };
 
@@ -640,26 +648,38 @@ export default function KidDashboard({
   const handleBuyItem = async () => {
     if (!confirmPurchaseItem || loading) return;
     const item = confirmPurchaseItem;
+    const customInput = purchaseCustomInput;
 
     const isDiscounted = item.discountPercentage && item.discountUntil && (new Date(item.discountUntil?.toDate ? item.discountUntil.toDate() : item.discountUntil).getTime() > Date.now());
     const finalPrice = isDiscounted ? Math.max(1, Math.floor(item.points * (1 - item.discountPercentage! / 100))) : item.points;
 
     if (currentUser.points < finalPrice) {
       showAlert("Ой!", "Недостаточно баллов для покупки! Выполняйте больше квестов. 🧹");
-      setConfirmPurchaseItem(null);
-      setPurchaseCustomInput("");
       return;
     }
 
+    setConfirmPurchaseItem(null);
+    setPurchaseCustomInput("");
     setLoading(true);
+
+    if (item.isChest) {
+      setOpeningChest(item);
+      // Wait 2 seconds for chest animation
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    } else {
+      setProcessingOrder(true);
+      // Artificial delay so user sees the message
+      await new Promise(resolve => setTimeout(resolve, 1500));
+    }
+
     try {
       const kidRef = doc(db, "users", currentUser.id);
       const itemRef = doc(db, "marketplace", item.id);
       
       if (item.isChest) {
         // CHEST LOGIC
-        const min = item.chestMin || 10;
-        const max = item.chestMax || 100;
+        const min = item.chestMin || 1;
+        const max = item.chestMax || 50;
         const reward = Math.floor(Math.random() * (max - min + 1)) + min;
         
         const newBalance = currentUser.points - finalPrice + reward;
@@ -702,6 +722,7 @@ export default function KidDashboard({
           );
         }
         
+        setOpeningChest(null);
         showAlert("Сундук Открыт! 📦", `Вы открыли сундук и нашли там ${reward} монет! 🎉`);
       } else {
         // REGULAR PURCHASE LOGIC
@@ -719,7 +740,7 @@ export default function KidDashboard({
           points: finalPrice,
           status: "pending",
           createdAt: new Date(),
-          customInput: purchaseCustomInput || undefined
+          customInput: customInput || undefined
         });
 
         const txId = "tx-" + Math.random().toString(36).substr(2, 9);
@@ -748,79 +769,80 @@ export default function KidDashboard({
         showAlert("Поздравляем! 🎉", `Успешно куплено! 🎉 С вашего счета списано ${finalPrice} монет. Ваша заявка успешно принята, ждите подтверждения!`);
       }
       
-      setConfirmPurchaseItem(null);
-      setPurchaseCustomInput("");
     } catch (err) {
       console.error("Failed to purchase item:", err);
       showAlert("Ошибка", "Не удалось завершить покупку");
     } finally {
       setLoading(false);
+      setProcessingOrder(null);
+      setOpeningChest(null);
     }
   };
 
   // Game Handlers
   const handlePlayRps = async (choice: "rock" | "paper" | "scissors") => {
-    if (currentUser.points < 10) {
-      showAlert("Ой!", "Недостаточно баллов для игры!");
+    if (currentUser.points < gameBet) {
+      showAlert("Ой!", "Недостаточно монет для игры!");
       return;
     }
     
-    // Check limit (simplified daily check based on today's txs could be added here, we trust basic for now)
-    const todayGameTxs = transactions.filter(t => t.kidId === currentUser.id && t.type === "expense" && t.description?.includes("Игра"));
+    const todayGameTxs = transactions.filter(t => t.kidId === currentUser.id && t.type === "expense" && t.description?.includes("Суефа"));
     const spentToday = todayGameTxs.reduce((sum, t) => sum + t.amount, 0);
     
-    if (spentToday >= 100) {
-      showAlert("Лимит исчерпан", "Ты уже потратил 100 монет на игры сегодня! Возвращайся завтра.");
+    if (spentToday + gameBet > 50) {
+      showAlert("Лимит исчерпан", "Максимум 50 монет в день на эту игру! Возвращайся завтра.");
       return;
     }
 
     setRpsLoading(true);
     setRpsChoice(choice);
     
-    // 40% win chance logic
-    const rand = Math.random();
-    let outcome = "lose"; // default
-    if (rand < 0.4) {
-      outcome = "win";
-    } else if (rand < 0.6) {
-      outcome = "draw";
-    }
-    
-    let botChoice = "rock";
-    if (outcome === "draw") botChoice = choice;
-    else if (outcome === "win") {
-      if (choice === "rock") botChoice = "scissors";
-      if (choice === "paper") botChoice = "rock";
-      if (choice === "scissors") botChoice = "paper";
-    } else {
-      if (choice === "rock") botChoice = "paper";
-      if (choice === "paper") botChoice = "scissors";
-      if (choice === "scissors") botChoice = "rock";
-    }
-    
     setTimeout(async () => {
+      const options = ["rock", "paper", "scissors"];
+      const botChoice = options[Math.floor(Math.random() * options.length)];
+      
+      let outcome: "win" | "lose" | "draw" = "draw";
+      if (choice === botChoice) outcome = "draw";
+      else if (
+        (choice === "rock" && botChoice === "scissors") ||
+        (choice === "paper" && botChoice === "rock") ||
+        (choice === "scissors" && botChoice === "paper")
+      ) {
+        outcome = "win";
+      } else {
+        outcome = "lose";
+      }
+      
+      setRpsResult({ player: choice, bot: botChoice, outcome });
+      
       try {
-        const kidRef = doc(db, "users", currentUser.id);
-        
         if (outcome === "win") {
-          // Bet 10, win 20 -> net +10
-          await updateDoc(kidRef, { points: currentUser.points + 10 });
-          const txId = "tx-game-" + Math.random().toString(36).substr(2, 9);
-          await setDoc(doc(db, "transactions", txId), {
-            id: txId, kidId: currentUser.id, kidName: currentUser.name, type: "income", amount: 10, description: `Выигрыш в Суефа (${choice})`, createdAt: new Date(), balanceAfter: currentUser.points + 10
+          await updateDoc(doc(db, "users", currentUser.id), {
+            points: increment(gameBet)
+          });
+          await addDoc(collection(db, "transactions"), {
+            kidId: currentUser.id,
+            type: "income",
+            amount: gameBet,
+            description: "Победа в игре (Суефа)",
+            createdAt: new Date(),
+            balanceAfter: currentUser.points + gameBet
           });
         } else if (outcome === "lose") {
-          // Bet 10, lose 10 -> net -10
-          await updateDoc(kidRef, { points: currentUser.points - 10 });
-          const txId = "tx-game-" + Math.random().toString(36).substr(2, 9);
-          await setDoc(doc(db, "transactions", txId), {
-            id: txId, kidId: currentUser.id, kidName: currentUser.name, type: "expense", amount: 10, description: `Проигрыш в Суефа (${choice})`, createdAt: new Date(), balanceAfter: currentUser.points - 10
+          await updateDoc(doc(db, "users", currentUser.id), {
+            points: increment(-gameBet)
+          });
+          await addDoc(collection(db, "transactions"), {
+            kidId: currentUser.id,
+            type: "expense",
+            amount: gameBet,
+            description: "Проигрыш в игре (Суефа)",
+            createdAt: new Date(),
+            balanceAfter: currentUser.points - gameBet
           });
         }
-        
-        setRpsResult({ player: choice, bot: botChoice, outcome, amount: 10 });
-      } catch (e) {
-        console.error(e);
+      } catch (err) {
+        console.error(err);
       } finally {
         setRpsLoading(false);
       }
@@ -828,49 +850,57 @@ export default function KidDashboard({
   };
   
   const handlePlayCoin = async (choice: "heads" | "tails") => {
-    if (currentUser.points < 10) {
-      showAlert("Ой!", "Недостаточно баллов для игры!");
+    if (currentUser.points < gameBet) {
+      showAlert("Ой!", "Недостаточно монет для игры!");
       return;
     }
     
-    const todayGameTxs = transactions.filter(t => t.kidId === currentUser.id && t.type === "expense" && t.description?.includes("Игра"));
+    const todayGameTxs = transactions.filter(t => t.kidId === currentUser.id && t.type === "expense" && t.description?.includes("Орел"));
     const spentToday = todayGameTxs.reduce((sum, t) => sum + t.amount, 0);
     
-    if (spentToday >= 100) { // Using 100 total limit
-      showAlert("Лимит исчерпан", "Ты уже потратил лимит на игры сегодня! Возвращайся завтра.");
+    if (spentToday + gameBet > 50) {
+      showAlert("Лимит исчерпан", "Максимум 50 монет в день на эту игру! Возвращайся завтра.");
       return;
     }
 
     setCoinLoading(true);
     setCoinChoice(choice);
     
-    const rand = Math.random();
-    let outcome = "lose";
-    if (rand < 0.4) outcome = "win"; // 40% win
-    
-    const botChoice = outcome === "win" ? choice : (choice === "heads" ? "tails" : "heads");
-    
     setTimeout(async () => {
+      const options = ["heads", "tails"];
+      const botChoice = options[Math.floor(Math.random() * options.length)];
+      
+      const outcome: "win" | "lose" = choice === botChoice ? "win" : "lose";
+      setCoinResult({ player: choice, bot: botChoice, outcome, amount: gameBet });
+      
       try {
-        const kidRef = doc(db, "users", currentUser.id);
-        
         if (outcome === "win") {
-          await updateDoc(kidRef, { points: currentUser.points + 10 });
-          const txId = "tx-game-" + Math.random().toString(36).substr(2, 9);
-          await setDoc(doc(db, "transactions", txId), {
-            id: txId, kidId: currentUser.id, kidName: currentUser.name, type: "income", amount: 10, description: `Выигрыш Орел/Решка (${choice})`, createdAt: new Date(), balanceAfter: currentUser.points + 10
+          await updateDoc(doc(db, "users", currentUser.id), {
+            points: increment(gameBet)
           });
-        } else if (outcome === "lose") {
-          await updateDoc(kidRef, { points: currentUser.points - 10 });
-          const txId = "tx-game-" + Math.random().toString(36).substr(2, 9);
-          await setDoc(doc(db, "transactions", txId), {
-            id: txId, kidId: currentUser.id, kidName: currentUser.name, type: "expense", amount: 10, description: `Проигрыш Орел/Решка (${choice})`, createdAt: new Date(), balanceAfter: currentUser.points - 10
+          await addDoc(collection(db, "transactions"), {
+            kidId: currentUser.id,
+            type: "income",
+            amount: gameBet,
+            description: "Победа в игре (Орел или Решка)",
+            createdAt: new Date(),
+            balanceAfter: currentUser.points + gameBet
+          });
+        } else {
+          await updateDoc(doc(db, "users", currentUser.id), {
+            points: increment(-gameBet)
+          });
+          await addDoc(collection(db, "transactions"), {
+            kidId: currentUser.id,
+            type: "expense",
+            amount: gameBet,
+            description: "Проигрыш в игре (Орел или Решка)",
+            createdAt: new Date(),
+            balanceAfter: currentUser.points - gameBet
           });
         }
-        
-        setCoinResult({ player: choice, bot: botChoice, outcome, amount: 10 });
-      } catch (e) {
-        console.error(e);
+      } catch (err) {
+        console.error(err);
       } finally {
         setCoinLoading(false);
       }
@@ -916,7 +946,13 @@ export default function KidDashboard({
               <div className="text-[9px] font-black text-amber-100 uppercase tracking-wider">Мой баланс</div>
               <div className="text-xl md:text-3xl font-black mt-0.5 tracking-tight">🪙 {currentUser.points}</div>
             </div>
-            
+            <button 
+              onClick={() => setIsHistoryModalOpen(true)}
+              className="p-2 bg-black/10 hover:bg-black/20 rounded-xl transition-colors cursor-pointer"
+              title="История операций"
+            >
+              <RotateCcw className="w-5 h-5 text-white/90" />
+            </button>
           </div>
         </div>
 {/* Daily Streak */}
@@ -952,81 +988,8 @@ export default function KidDashboard({
       </div>
 
       {/* Tabs */}
-      <div className="flex bg-slate-100 p-1.5 rounded-2xl w-fit">
-        <button
-          onClick={() => setActiveTab("quests")}
-          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-            activeTab === "quests"
-              ? `${palette.bg} text-white shadow`
-              : "text-slate-600 hover:text-slate-900"
-          }`}
-        >
-          <Award className="w-4 h-4" />
-          Мои Задания
-          {kidChores.filter(c => c.status === "pending" || c.status === "rejected").length > 0 && (
-            <span className="bg-rose-500 text-white font-extrabold text-[9px] px-1.5 py-0.5 rounded-full">
-              {kidChores.filter(c => c.status === "pending" || c.status === "rejected").length}
-            </span>
-          )}
-        </button>
-        <button
-          onClick={() => setActiveTab("store")}
-          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-            activeTab === "store"
-              ? `${palette.bg} text-white shadow`
-              : "text-slate-600 hover:text-slate-900"
-          }`}
-        >
-          <ShoppingBag className="w-4 h-4" />
-          Магазин Наград
-        </button>
-        <button
-          onClick={() => setActiveTab("daily")}
-          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 relative cursor-pointer ${
-            activeTab === "daily"
-              ? `${palette.bg} text-white shadow`
-              : "text-slate-600 hover:text-slate-900"
-          }`}
-        >
-          <Flame className="w-4 h-4 animate-bounce" />
-          Ежедневная Отметка
-          {canClaimDaily && (
-            <span className="absolute -top-1.5 -right-1.5 bg-rose-500 text-white text-[9px] font-black w-3.5 h-3.5 rounded-full flex items-center justify-center animate-ping"></span>
-          )}
-        </button>
-        <button
-          onClick={() => setActiveTab("achievements")}
-          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-            activeTab === "achievements"
-              ? `${palette.bg} text-white shadow`
-              : "text-slate-600 hover:text-slate-900"
-          }`}
-        >
-          <Trophy className="w-4 h-4" />
-          Достижения
-        </button>
-        <button
-          onClick={() => setActiveTab("games")}
-          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-            activeTab === "games"
-              ? `${palette.bg} text-white shadow`
-              : "text-slate-600 hover:text-slate-900"
-          }`}
-        >
-          <Gamepad2 className="w-4 h-4" />
-          Игры
-        </button>
-        <button
-          onClick={() => setActiveTab("history")}
-          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-            activeTab === "history"
-              ? `${palette.bg} text-white shadow`
-              : "text-slate-600 hover:text-slate-900"
-          }`}
-        >
-          <RotateCcw className="w-4 h-4" />
-          История
-        </button>
+      <div className="flex flex-wrap bg-slate-100 p-1.5 rounded-2xl w-full">
+        
       </div>
 
       {/* QUESTS BOARD VIEW */}
@@ -1049,22 +1012,13 @@ export default function KidDashboard({
                   <motion.div
                     key={chore.id}
                     layoutId={`chore-card-${chore.id}`}
-                    className="p-5 border border-slate-200 bg-white rounded-3xl shadow-sm flex flex-col justify-between gap-4 relative overflow-hidden"
+                    className={`p-5 border bg-white rounded-3xl shadow-sm flex flex-col justify-between gap-4 relative overflow-hidden ${chore.isUrgent ? "border-rose-400 shadow-rose-100" : "border-slate-200"}`}
                   >
                     <div className="space-y-1.5">
                       <div className="flex justify-between items-center">
                         {chore.isUrgent ? (
                            <span className="font-mono text-xs font-black text-rose-600 bg-rose-50 px-2.5 py-0.5 rounded-lg border border-rose-200 flex items-center gap-1 shadow-xs">
-                             🔥 СРОЧНОЕ x2 (+{chore.points})
-                           </span>
-                        ) : (
-                           <span className="font-mono text-xs font-extrabold text-amber-600 bg-amber-50 px-2.5 py-0.5 rounded-lg border border-amber-100">
-                             🪙 +{chore.points} баллов
-                           </span>
-                        )}
-                        {chore.isUrgent ? (
-                           <span className="font-mono text-xs font-black text-rose-600 bg-rose-50 px-2.5 py-0.5 rounded-lg border border-rose-200 flex items-center gap-1 shadow-xs">
-                             🔥 СРОЧНОЕ x2 (+{chore.points})
+                             🔥 СРОЧНОЕ (+{chore.points})
                            </span>
                         ) : (
                            <span className="font-mono text-xs font-extrabold text-amber-600 bg-amber-50 px-2.5 py-0.5 rounded-lg border border-amber-100">
@@ -1116,14 +1070,20 @@ export default function KidDashboard({
                   <div
                     key={chore.id}
                     className={`p-5 border rounded-3xl bg-white shadow-sm flex flex-col justify-between gap-4 relative overflow-hidden ${
-                      chore.status === "rejected" ? "border-red-200 bg-rose-50/10" : "border-slate-200"
+                      chore.status === "rejected" ? "border-red-400 bg-rose-50/20" : chore.isUrgent ? "border-rose-400 shadow-rose-100" : "border-slate-200"
                     }`}
                   >
                     <div className="space-y-1.5">
                       <div className="flex justify-between items-center">
-                        <span className="font-mono text-xs font-extrabold text-amber-600 bg-amber-50 px-2.5 py-0.5 rounded-lg border border-amber-100">
-                          🪙 +{chore.points} монет
-                        </span>
+                        {chore.isUrgent ? (
+                           <span className="font-mono text-xs font-black text-rose-600 bg-rose-50 px-2.5 py-0.5 rounded-lg border border-rose-200 flex items-center gap-1 shadow-xs">
+                             🔥 СРОЧНОЕ (+{chore.points})
+                           </span>
+                        ) : (
+                           <span className="font-mono text-xs font-extrabold text-amber-600 bg-amber-50 px-2.5 py-0.5 rounded-lg border border-amber-100">
+                             🪙 +{chore.points} баллов
+                           </span>
+                        )}
                         <div className="text-[10px] font-bold">
                           {chore.status === "rejected" ? (
                             <span className="text-red-500 font-extrabold uppercase">❌ Доработка</span>
@@ -2013,9 +1973,9 @@ export default function KidDashboard({
               {confirmPurchaseItem.requiresInput && (
                 <div className="text-left space-y-1 mt-2">
                   <label className="block text-[10px] font-bold text-slate-400 uppercase">{confirmPurchaseItem.inputLabel}</label>
+                  <p className="text-[9px] text-slate-400 leading-tight">Если хотите получить товар лично, оставьте поле пустым или впишите 0.</p>
                   <input
                     type="text"
-                    required
                     value={purchaseCustomInput}
                     onChange={(e) => setPurchaseCustomInput(e.target.value)}
                     className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500"
@@ -2041,7 +2001,7 @@ export default function KidDashboard({
                 </button>
                 <button
                   onClick={handleBuyItem}
-                  disabled={loading || (confirmPurchaseItem.requiresInput && !purchaseCustomInput.trim())}
+                  disabled={loading}
                   className={`flex-1 py-3 ${palette.bg} ${palette.hover} text-white font-bold rounded-2xl text-xs transition-all shadow-sm cursor-pointer disabled:opacity-50`}
                 >
                   Купить! 🚀
@@ -2074,73 +2034,235 @@ export default function KidDashboard({
           </div>
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Rock Paper Scissors */}
-            <div className="bg-slate-50 border border-slate-200 rounded-3xl p-5 relative overflow-hidden flex flex-col justify-between">
+            {/* Rock Paper Scissors Card */}
+            <div 
+              onClick={() => { setActiveGame("rps"); setGameBet(10); setRpsResult(null); }}
+              className="bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-3xl p-5 cursor-pointer transition-all flex items-center gap-4 group"
+            >
+              <div className="text-5xl group-hover:scale-110 transition-transform select-none">✊✌️🖐️</div>
               <div>
-                <h3 className="text-lg font-black text-slate-700 flex items-center gap-2">
-                  ✊✌️🖐️ Суефа
-                </h3>
-                <p className="text-xs text-slate-500 mt-1 mb-4">Ставка 10 монет. Шанс победы 40%. Лимит 100 монет в день.</p>
+                <h3 className="text-lg font-black text-slate-700">Суефа</h3>
+                <p className="text-xs text-slate-500 mt-1">Лимит игр: 50 монет в день.</p>
               </div>
-              
-              {rpsResult ? (
-                <div className="text-center bg-white p-4 rounded-2xl border border-slate-200">
-                  <div className="flex justify-center items-center gap-4 text-3xl mb-2">
-                    <span>{rpsResult.player === "rock" ? "✊" : rpsResult.player === "paper" ? "🖐️" : "✌️"}</span>
-                    <span className="text-sm font-bold text-slate-400">VS</span>
-                    <span>{rpsResult.bot === "rock" ? "✊" : rpsResult.bot === "paper" ? "🖐️" : "✌️"}</span>
-                  </div>
-                  <div className={`text-lg font-black ${rpsResult.outcome === "win" ? "text-emerald-500" : rpsResult.outcome === "lose" ? "text-rose-500" : "text-amber-500"}`}>
-                    {rpsResult.outcome === "win" ? "+10 🪙 ВЫИГРЫШ!" : rpsResult.outcome === "lose" ? "-10 🪙 ПРОИГРЫШ" : "НИЧЬЯ"}
-                  </div>
-                  <button onClick={() => setRpsResult(null)} className="mt-3 text-xs font-bold text-indigo-500 hover:text-indigo-600 cursor-pointer">
-                    Сыграть еще раз
-                  </button>
-                </div>
-              ) : rpsLoading ? (
-                <div className="py-6 flex justify-center"><RefreshCw className="w-8 h-8 animate-spin text-indigo-500" /></div>
-              ) : (
-                <div className="grid grid-cols-3 gap-2">
-                  <button onClick={() => handlePlayRps("rock")} className="py-3 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl text-2xl transition-all cursor-pointer shadow-sm">✊</button>
-                  <button onClick={() => handlePlayRps("scissors")} className="py-3 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl text-2xl transition-all cursor-pointer shadow-sm">✌️</button>
-                  <button onClick={() => handlePlayRps("paper")} className="py-3 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl text-2xl transition-all cursor-pointer shadow-sm">🖐️</button>
-                </div>
-              )}
             </div>
             
-            {/* Coin Flip */}
-            <div className="bg-slate-50 border border-slate-200 rounded-3xl p-5 relative overflow-hidden flex flex-col justify-between">
+            {/* Coin Flip Card */}
+            <div 
+              onClick={() => { setActiveGame("coin"); setGameBet(10); setCoinResult(null); }}
+              className="bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-3xl p-5 cursor-pointer transition-all flex items-center gap-4 group"
+            >
+              <div className="text-5xl group-hover:scale-110 transition-transform select-none">🪙</div>
               <div>
-                <h3 className="text-lg font-black text-slate-700 flex items-center gap-2">
-                  🪙 Орел или Решка
-                </h3>
-                <p className="text-xs text-slate-500 mt-1 mb-4">Ставка 10 монет. Угадай сторону. Шанс победы 40%.</p>
+                <h3 className="text-lg font-black text-slate-700">Орел или Решка</h3>
+                <p className="text-xs text-slate-500 mt-1">Лимит игр: 50 монет в день.</p>
               </div>
-              
-              {coinResult ? (
-                <div className="text-center bg-white p-4 rounded-2xl border border-slate-200">
-                  <div className="text-4xl mb-2">
-                    {coinResult.bot === "heads" ? "🦅" : "🪙"}
-                  </div>
-                  <div className={`text-lg font-black ${coinResult.outcome === "win" ? "text-emerald-500" : "text-rose-500"}`}>
-                    {coinResult.outcome === "win" ? "+10 🪙 ВЫИГРЫШ!" : "-10 🪙 ПРОИГРЫШ"}
-                  </div>
-                  <button onClick={() => setCoinResult(null)} className="mt-3 text-xs font-bold text-indigo-500 hover:text-indigo-600 cursor-pointer">
-                    Сыграть еще раз
-                  </button>
-                </div>
-              ) : coinLoading ? (
-                <div className="py-6 flex justify-center"><RefreshCw className="w-8 h-8 animate-spin text-indigo-500" /></div>
-              ) : (
-                <div className="grid grid-cols-2 gap-2">
-                  <button onClick={() => handlePlayCoin("heads")} className="py-3 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl text-lg font-bold transition-all cursor-pointer shadow-sm">🦅 Орел</button>
-                  <button onClick={() => handlePlayCoin("tails")} className="py-3 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl text-lg font-bold transition-all cursor-pointer shadow-sm">🪙 Решка</button>
-                </div>
-              )}
             </div>
           </div>
         </div>
       )}
+
+      {/* Game Play Modal */}
+      <AnimatePresence>
+        {activeGame && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl overflow-hidden max-w-sm w-full shadow-2xl border border-slate-100 flex flex-col"
+            >
+              <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+                <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
+                  <Gamepad2 className="w-4 h-4 text-indigo-500" />
+                  {activeGame === "rps" ? "Суефа" : "Орел или Решка"}
+                </h3>
+                <button
+                  onClick={() => { setActiveGame(null); setRpsResult(null); setCoinResult(null); }}
+                  className="p-1.5 hover:bg-slate-200 text-slate-400 hover:text-slate-700 rounded-lg text-xs font-bold cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              
+              <div className="p-6">
+                {!rpsResult && !coinResult && !rpsLoading && !coinLoading && (
+                  <div className="mb-6">
+                    <label className="block text-xs font-bold text-slate-500 mb-2 uppercase">Ваша ставка (монет)</label>
+                    <input 
+                      type="number" 
+                      min={1} 
+                      max={50}
+                      value={gameBet} 
+                      onChange={(e) => setGameBet(Math.min(50, Math.max(1, Number(e.target.value) || 1)))}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-lg font-black text-center focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                )}
+                
+                {activeGame === "rps" ? (
+                  <div>
+                    {rpsResult ? (
+                      <div className="text-center bg-slate-50 p-6 rounded-3xl border border-slate-200">
+                        <div className="flex justify-center items-center gap-4 text-4xl mb-4">
+                          <span>{rpsResult.player === "rock" ? "✊" : rpsResult.player === "paper" ? "🖐️" : "✌️"}</span>
+                          <span className="text-sm font-bold text-slate-400">VS</span>
+                          <span>{rpsResult.bot === "rock" ? "✊" : rpsResult.bot === "paper" ? "🖐️" : "✌️"}</span>
+                        </div>
+                        <div className={`text-xl font-black mb-4 ${rpsResult.outcome === "win" ? "text-emerald-500" : rpsResult.outcome === "lose" ? "text-rose-500" : "text-amber-500"}`}>
+                          {rpsResult.outcome === "win" ? `+${gameBet} 🪙 ВЫИГРЫШ!` : rpsResult.outcome === "lose" ? `-${gameBet} 🪙 ПРОИГРЫШ` : "НИЧЬЯ"}
+                        </div>
+                        <button onClick={() => setRpsResult(null)} className="w-full py-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-xl cursor-pointer transition-colors">
+                          Сыграть еще раз
+                        </button>
+                      </div>
+                    ) : rpsLoading ? (
+                      <div className="py-12 flex justify-center"><RefreshCw className="w-12 h-12 animate-spin text-indigo-500" /></div>
+                    ) : (
+                      <div className="grid grid-cols-3 gap-3">
+                        <button onClick={() => handlePlayRps("rock")} className="py-4 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-2xl text-4xl transition-all cursor-pointer shadow-sm active:scale-95">✊</button>
+                        <button onClick={() => handlePlayRps("scissors")} className="py-4 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-2xl text-4xl transition-all cursor-pointer shadow-sm active:scale-95">✌️</button>
+                        <button onClick={() => handlePlayRps("paper")} className="py-4 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-2xl text-4xl transition-all cursor-pointer shadow-sm active:scale-95">🖐️</button>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div>
+                    {coinResult ? (
+                      <div className="text-center bg-slate-50 p-6 rounded-3xl border border-slate-200">
+                        <div className="flex justify-center items-center gap-4 text-4xl mb-4">
+                          <span className="text-amber-500">{coinResult.bot === "heads" ? "🦅 Орел" : "🪙 Решка"}</span>
+                        </div>
+                        <div className={`text-xl font-black mb-4 ${coinResult.outcome === "win" ? "text-emerald-500" : "text-rose-500"}`}>
+                          {coinResult.outcome === "win" ? `+${gameBet} 🪙 ВЫИГРЫШ!` : `-${gameBet} 🪙 ПРОИГРЫШ`}
+                        </div>
+                        <button onClick={() => setCoinResult(null)} className="w-full py-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-xl cursor-pointer transition-colors">
+                          Сыграть еще раз
+                        </button>
+                      </div>
+                    ) : coinLoading ? (
+                      <div className="py-12 flex justify-center"><RefreshCw className="w-12 h-12 animate-spin text-indigo-500" /></div>
+                    ) : (
+                      <div className="grid grid-cols-2 gap-3">
+                        <button onClick={() => handlePlayCoin("heads")} className="py-6 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-2xl transition-all cursor-pointer shadow-sm active:scale-95 flex flex-col items-center gap-2">
+                          <span className="text-4xl text-amber-500">🦅</span>
+                          <span className="font-bold text-slate-700">Орел</span>
+                        </button>
+                        <button onClick={() => handlePlayCoin("tails")} className="py-6 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-2xl transition-all cursor-pointer shadow-sm active:scale-95 flex flex-col items-center gap-2">
+                          <span className="text-4xl text-amber-500">🪙</span>
+                          <span className="font-bold text-slate-700">Решка</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {openingChest && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[100] flex flex-col items-center justify-center p-4">
+          <motion.div
+            initial={{ scale: 0.8, rotate: -5 }}
+            animate={{ scale: [0.8, 1.1, 1], rotate: [-5, 5, -5, 0] }}
+            transition={{ duration: 1.5, repeat: Infinity, repeatType: "reverse" }}
+            className="text-8xl mb-6 select-none drop-shadow-2xl"
+          >
+            {openingChest.image && openingChest.image.startsWith("http") ? (
+               <img src={openingChest.image} alt="chest" className="w-32 h-32 object-contain" />
+            ) : openingChest.image || "🎁"}
+          </motion.div>
+          <motion.h2 
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="text-2xl md:text-3xl font-black text-white text-center"
+          >
+            Открываем сундук...
+          </motion.h2>
+          <p className="text-white/60 font-medium mt-2">Пожалуйста, подождите!</p>
+        </div>
+      )}
+
+      {processingOrder && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[100] flex flex-col items-center justify-center p-4">
+          <motion.div
+            animate={{ rotate: 360 }}
+            transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+            className="mb-6"
+          >
+            <RefreshCw className="w-16 h-16 text-indigo-500" />
+          </motion.div>
+          <motion.h2 
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="text-xl md:text-2xl font-black text-white text-center"
+          >
+            Ваш заказ обрабатывается
+          </motion.h2>
+          <p className="text-white/60 font-medium mt-2">Пожалуйста, подождите...</p>
+        </div>
+      )}
+
+      {/* History Modal */}
+      <AnimatePresence>
+        {isHistoryModalOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl overflow-hidden max-w-md w-full shadow-2xl border border-slate-100 flex flex-col max-h-[85vh]"
+            >
+              <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+                <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
+                  <RotateCcw className="w-4 h-4 text-indigo-500" />
+                  История операций (баланс)
+                </h3>
+                <button
+                  onClick={() => setIsHistoryModalOpen(false)}
+                  className="p-1.5 hover:bg-slate-200 text-slate-400 hover:text-slate-700 rounded-lg text-xs font-bold cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="p-5 overflow-y-auto space-y-3 bg-slate-50 divide-y divide-slate-100">
+                {transactions.filter(t => t.kidId === currentUser.id).length === 0 ? (
+                  <div className="p-8 text-center text-xs text-slate-400 font-semibold bg-white rounded-2xl border border-slate-100">
+                    История операций пуста. Зарабатывайте монеты на квестах! 💪
+                  </div>
+                ) : (
+                  transactions.filter(t => t.kidId === currentUser.id).sort((a, b) => b.createdAt.toMillis() - a.createdAt.toMillis()).map((tx) => {
+                    const isIncome = tx.type === "income";
+                    let dateStr = "Неизвестно";
+                    if (tx.createdAt) {
+                      try {
+                        const dateObj = tx.createdAt.toDate ? tx.createdAt.toDate() : new Date(tx.createdAt);
+                        dateStr = dateObj.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+                      } catch (e) {}
+                    }
+                    return (
+                      <div key={tx.id} className="py-3 flex justify-between items-center gap-3">
+                        <div className="truncate">
+                          <div className="text-xs font-bold text-slate-700 truncate">{tx.description}</div>
+                          <div className="text-[10px] text-slate-400 mt-0.5">{dateStr} • Баланс: {tx.balanceAfter} 🪙</div>
+                        </div>
+                        <span className={`text-xs font-bold px-2.5 py-1 rounded-md shrink-0 border ${
+                          isIncome 
+                            ? "text-emerald-700 bg-emerald-50 border-emerald-100" 
+                            : "text-rose-700 bg-rose-50 border-rose-100"
+                        }`}>
+                          {isIncome ? "+" : "-"}{tx.amount} 🪙
+                        </span>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

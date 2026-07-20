@@ -1,18 +1,10 @@
 const fs = require('fs');
 let content = fs.readFileSync('src/components/KidDashboard.tsx', 'utf8');
 
-const regex1 = /<div className="flex justify-between items-center">/;
-content = content.replace(regex1, `<div className="flex justify-between items-center">
-                        {chore.isUrgent ? (
-                           <span className="font-mono text-xs font-black text-rose-600 bg-rose-50 px-2.5 py-0.5 rounded-lg border border-rose-200 flex items-center gap-1 shadow-xs">
-                             🔥 СРОЧНОЕ x2 (+{chore.points})
-                           </span>
-                        ) : (
-                           <span className="font-mono text-xs font-extrabold text-amber-600 bg-amber-50 px-2.5 py-0.5 rounded-lg border border-amber-100">
-                             🪙 +{chore.points} баллов
-                           </span>
-                        )}`);
+const urgentRegex1 = /🔥 СРОЧНОЕ x2 \(\+\{chore\.points\}\)/g;
+content = content.replace(urgentRegex1, "🔥 СРОЧНОЕ (+{chore.points})");
 
-// There are multiple places where chore is rendered: Pending, Accepted, Completed?
-// Let's check where else `<div className="flex justify-between items-center">` is used inside Chore mapping
+const classRegex = /className="p-5 border border-slate-200 bg-white rounded-3xl shadow-sm flex flex-col justify-between gap-4 relative overflow-hidden"/g;
+content = content.replace(classRegex, 'className={`p-5 border bg-white rounded-3xl shadow-sm flex flex-col justify-between gap-4 relative overflow-hidden ${chore.isUrgent ? "border-rose-400 shadow-rose-100" : "border-slate-200"}`}');
+
 fs.writeFileSync('src/components/KidDashboard.tsx', content);

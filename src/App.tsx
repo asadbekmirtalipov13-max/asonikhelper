@@ -36,6 +36,7 @@ export default function App() {
   // Admin routing state: parents can toggle between dashboard and settings
   const [currentView, setCurrentView] = useState<"dashboard" | "admin" | "store">("dashboard");
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const [openingChest, setOpeningChest] = useState<any>(null);
   const [kidActiveTab, setKidActiveTab] = useState<"quests" | "store" | "daily" | "profile" | "history" | "achievements" | "games">("quests");
   const [dbLoading, setDbLoading] = useState(true);
 
@@ -239,6 +240,11 @@ export default function App() {
   
   const handleOpenChest = async (notification: any) => {
     if (!notification.chestPoints) return;
+    setOpeningChest(notification);
+    
+    // Fake animation delay
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
     const kidRef = doc(db, "users", currentUser.id);
     const newBalance = currentUser.points + notification.chestPoints;
     await updateDoc(kidRef, { points: newBalance });
@@ -253,6 +259,8 @@ export default function App() {
       createdAt: new Date()
     });
     await updateDoc(doc(db, "notifications", notification.id), { chestPoints: 0, title: notification.title + " (Открыто)" });
+    
+    setOpeningChest(null);
     showAlert("ОТКРЫТ СУНДУК! 🎉", `Вы получили ${notification.chestPoints} монет из сундука!`);
   };
   

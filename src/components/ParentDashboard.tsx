@@ -117,13 +117,13 @@ export default function ParentDashboard({
   const [isCreateChoreModalOpen, setIsCreateChoreModalOpen] = useState(false);
   const [itemRequiresInput, setItemRequiresInput] = useState(false);
   const [itemIsChest, setItemIsChest] = useState(false);
-  const [itemChestMin, setItemChestMin] = useState(10);
-  const [itemChestMax, setItemChestMax] = useState(100);
+  const [itemChestMin, setItemChestMin] = useState(1);
+  const [itemChestMax, setItemChestMax] = useState(50);
   const [itemInputLabel, setItemInputLabel] = useState("");
   const [editItemRequiresInput, setEditItemRequiresInput] = useState(false);
   const [editItemIsChest, setEditItemIsChest] = useState(false);
-  const [editItemChestMin, setEditItemChestMin] = useState(10);
-  const [editItemChestMax, setEditItemChestMax] = useState(100);
+  const [editItemChestMin, setEditItemChestMin] = useState(1);
+  const [editItemChestMax, setEditItemChestMax] = useState(50);
   const [editItemInputLabel, setEditItemInputLabel] = useState("");
 
   const startEditingItem = (item: MarketItem) => {
@@ -134,8 +134,8 @@ export default function ParentDashboard({
     setEditItemImage(item.image);
     setEditItemRequiresInput(item.requiresInput || false);
     setEditItemIsChest(item.isChest || false);
-    setEditItemChestMin(item.chestMin || 10);
-    setEditItemChestMax(item.chestMax || 100);
+    setEditItemChestMin(item.chestMin || 1);
+    setEditItemChestMax(item.chestMax || 50);
     setEditItemInputLabel(item.inputLabel || "");
     setEditItemStock(item.stock);
     setEditItemCategory(item.category || "");
@@ -541,8 +541,8 @@ export default function ParentDashboard({
       setItemRequiresInput(false);
       setItemInputLabel("");
       setItemIsChest(false);
-      setItemChestMin(10);
-      setItemChestMax(100);
+      setItemChestMin(1);
+      setItemChestMax(50);
       showAlert("Успешно", "Товар успешно добавлен в магазин!");
     } catch (err) {
       console.error("Failed to create market item:", err);
@@ -911,7 +911,7 @@ export default function ParentDashboard({
                     return (
                       <div 
                         key={chore.id}
-                        className="p-4 border border-slate-200 bg-white rounded-2xl flex flex-col justify-between gap-3 shadow-sm relative group"
+                        className={`p-4 border bg-white rounded-2xl flex flex-col justify-between gap-3 shadow-sm relative group ${chore.isUrgent ? "border-rose-400 shadow-rose-100" : "border-slate-200"}`}
                       >
                         <button
                           onClick={() => handleDeleteChore(chore.id, chore.title)}

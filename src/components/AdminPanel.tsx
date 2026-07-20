@@ -83,7 +83,7 @@ export default function AdminPanel({ currentUser, users, settings, onUpdateSetti
   const [notifTarget, setNotifTarget] = useState<string>("all");
   const [notifType, setNotifType] = useState<"message" | "chest">("message");
   const [notifText, setNotifText] = useState("");
-  const [notifChestPoints, setNotifChestPoints] = useState(10);
+  const [notifChestCount, setNotifChestCount] = useState(1);
   
   const handleSendNotification = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1543,16 +1543,16 @@ export default function AdminPanel({ currentUser, users, settings, onUpdateSetti
 
               {notifType === "chest" && (
                 <div>
-                  <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Сколько монет в сундуке</label>
+                  <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Количество сундуков</label>
                   <input
                     type="number"
                     min="1"
-                    max="1000"
-                    value={notifChestPoints}
-                    onChange={e => setNotifChestPoints(Number(e.target.value))}
+                    max="10"
+                    value={notifChestCount}
+                    onChange={e => setNotifChestCount(Number(e.target.value))}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
-                  <p className="text-[10px] text-slate-400 mt-1">Ребенок получит уведомление и сможет забрать монеты, нажав на него.</p>
+                  <p className="text-[10px] text-slate-400 mt-1">Ребенок получит указанное количество сундуков (каждый содержит от 1 до 50 случайных монет).</p>
                 </div>
               )}
 
