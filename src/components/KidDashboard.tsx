@@ -63,6 +63,7 @@ export default function KidDashboard({
   const [processingOrder, setProcessingOrder] = useState<any>(null);
   const [now, setNow] = useState(new Date());
   const [searchTerm, setSearchTerm] = useState("");
+  const [historyFilter, setHistoryFilter] = useState<"all" | "income" | "expense">("all");
   const [selectedCategory, setSelectedCategory] = useState<string>("");
   const [editingAvatar, setEditingAvatar] = useState(false);
   const [openFaq, setOpenFaq] = useState<string | null>(null);
@@ -107,8 +108,31 @@ export default function KidDashboard({
   // Shop confirmation modal state
   const [confirmPurchaseItem, setConfirmPurchaseItem] = useState<MarketItem | null>(null);
   const [purchaseCustomInput, setPurchaseCustomInput] = useState("");
+  const [giftPurchaseItem, setGiftPurchaseItem] = useState<MarketItem | null>(null);
+  const [giftTargetId, setGiftTargetId] = useState("");
 
   const [transferTargetId, setTransferTargetId] = useState("");
+  const [showUpdateModal, setShowUpdateModal] = useState<{title: string, text: string, version: number} | null>(null);
+  const [hasScrolledUpdate, setHasScrolledUpdate] = useState(false);
+
+  useEffect(() => {
+    if (settings.latestUpdate && settings.latestUpdate.version) {
+      if (!currentUser.lastSeenUpdate || currentUser.lastSeenUpdate < settings.latestUpdate.version) {
+        setShowUpdateModal(settings.latestUpdate);
+      }
+    }
+  }, [settings.latestUpdate, currentUser.lastSeenUpdate]);
+
+  const handleCloseUpdate = async () => {
+    if (!hasScrolledUpdate) return;
+    setShowUpdateModal(null);
+    try {
+      await updateDoc(doc(db, "users", currentUser.id), {
+        lastSeenUpdate: settings.latestUpdate.version
+      });
+    } catch(err) {}
+  };
+
   
   const [timeLeftToNextDay, setTimeLeftToNextDay] = useState("");
 
@@ -644,6 +668,96 @@ export default function KidDashboard({
     }
   };
 
+    const handleGiftItem = async () => {
+    if (!giftPurchaseItem || !giftTargetId || loading) return;
+    const item = giftPurchaseItem;
+    const customInput = purchaseCustomInput;
+    
+    const targetKid = kids.find(k => k.id === giftTargetId);
+    if (!targetKid) return;
+
+    const isDiscounted = item.discountPercentage && item.discountUntil && (new Date(item.discountUntil?.toDate ? item.discountUntil.toDate() : item.discountUntil).getTime() > Date.now());
+    const finalPrice = isDiscounted ? Math.max(1, Math.floor(item.points * (1 - item.discountPercentage / 100))) : item.points;
+
+    if (currentUser.points < finalPrice) {
+      showAlert("Ой!", "Недостаточно баллов для покупки подарка!");
+      return;
+    }
+
+    setGiftPurchaseItem(null);
+    setPurchaseCustomInput("");
+    setLoading(true);
+    setProcessingOrder(true);
+    await new Promise(resolve => setTimeout(resolve, 1500));
+
+    try {
+      const kidRef = doc(db, "users", currentUser.id);
+      const itemRef = doc(db, "marketplace", item.id);
+      
+      // Always create a purchase record, but for target kid
+      const purchaseId = "purchase-" + Math.random().toString(36).substr(2, 9);
+      
+      await updateDoc(kidRef, { points: currentUser.points - finalPrice });
+      
+      await setDoc(doc(db, "purchases", purchaseId), {
+        id: purchaseId,
+        kidId: targetKid.id,
+        kidName: targetKid.name,
+        productId: item.id,
+        productTitle: item.title,
+        productImage: item.image,
+        points: finalPrice, // It's free for them, but we record cost
+        status: "pending",
+        createdAt: new Date(),
+        customInput: customInput || undefined,
+        giftedBy: currentUser.name
+      });
+
+      const txId = "tx-" + Math.random().toString(36).substr(2, 9);
+      await setDoc(doc(db, "transactions", txId), {
+        id: txId,
+        kidId: currentUser.id,
+        kidName: currentUser.name,
+        type: "expense",
+        amount: finalPrice,
+        description: `Подарок для ${targetKid.name}: ${item.title}`,
+        createdAt: new Date(),
+        balanceAfter: currentUser.points - finalPrice
+      });
+
+      if (item.stock > 0) {
+        await updateDoc(itemRef, { stock: item.stock - 1 });
+      }
+
+      if (settings.telegramChatId) {
+        await sendTelegramNotification(
+          `🎁 <b>Новый Подарок!</b>\nОт: ${currentUser.name} ${currentUser.avatar}\nКому: ${targetKid.name} ${targetKid.avatar}\nПодарок: <b>${item.title}</b>\nПотрачено: 🪙 <b>${finalPrice} монет</b>\n\n<i>Родители, подтвердите выдачу подарка в админ-панели!</i>`,
+          settings.telegramChatId
+        );
+      }
+      
+      // Notify the receiver
+      const notifRef = doc(collection(db, "notifications"));
+      await setDoc(notifRef, {
+        kidId: targetKid.id,
+        type: "message",
+        title: `🎁 Вам подарок от ${currentUser.name}!`,
+        text: `Вы получили подарок: ${item.title}!`,
+        createdAt: new Date(),
+        read: false
+      });
+
+      showAlert("Поздравляем! 🎉", `Вы успешно подарили ${item.title} брату/сестре (${targetKid.name})!`);
+      
+    } catch (err) {
+      console.error("Failed to gift item:", err);
+      showAlert("Ошибка", "Не удалось отправить подарок.");
+    } finally {
+      setLoading(false);
+      setProcessingOrder(null);
+    }
+  };
+
   // 3. Purchase logic
   const handleBuyItem = async () => {
     if (!confirmPurchaseItem || loading) return;
@@ -818,15 +932,15 @@ export default function KidDashboard({
       try {
         if (outcome === "win") {
           await updateDoc(doc(db, "users", currentUser.id), {
-            points: increment(gameBet)
+            points: increment(gameBet * 2)
           });
           await addDoc(collection(db, "transactions"), {
             kidId: currentUser.id,
             type: "income",
-            amount: gameBet,
-            description: "Победа в игре (Суефа)",
+            amount: gameBet * 2,
+            description: "Победа в игре (Суефа) - Удвоение!",
             createdAt: new Date(),
-            balanceAfter: currentUser.points + gameBet
+            balanceAfter: currentUser.points + (gameBet * 2)
           });
         } else if (outcome === "lose") {
           await updateDoc(doc(db, "users", currentUser.id), {
@@ -876,15 +990,15 @@ export default function KidDashboard({
       try {
         if (outcome === "win") {
           await updateDoc(doc(db, "users", currentUser.id), {
-            points: increment(gameBet)
+            points: increment(gameBet * 2)
           });
           await addDoc(collection(db, "transactions"), {
             kidId: currentUser.id,
             type: "income",
-            amount: gameBet,
-            description: "Победа в игре (Орел или Решка)",
+            amount: gameBet * 2,
+            description: "Победа в игре (Орел или Решка) - Удвоение!",
             createdAt: new Date(),
-            balanceAfter: currentUser.points + gameBet
+            balanceAfter: currentUser.points + (gameBet * 2)
           });
         } else {
           await updateDoc(doc(db, "users", currentUser.id), {
@@ -1103,8 +1217,8 @@ export default function KidDashboard({
                   </motion.div>
                 ))}
               </div>
-            )}
-          </div>
+                    )}
+                  </div>
 
           {/* Active Work Section */}
           <div className="space-y-3">
@@ -1153,8 +1267,8 @@ export default function KidDashboard({
                         <div className="p-3 bg-rose-100/50 border border-rose-200 rounded-2xl text-[11px] text-rose-700 leading-normal">
                           <span className="font-bold">Мама пишет:</span> "{chore.parentFeedback}"
                         </div>
-                      )}
-                    </div>
+                    )}
+                  </div>
 
                     <div className="space-y-2">
                       <button
@@ -1173,8 +1287,8 @@ export default function KidDashboard({
                   </div>
                 ))}
               </div>
-            )}
-          </div>
+                    )}
+                  </div>
 
           {/* Under Review & Completed Section */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1213,8 +1327,8 @@ export default function KidDashboard({
                         <div className="font-bold text-slate-700 line-clamp-1">{chore.title}</div>
                         {chore.parentFeedback && (
                           <div className="text-[10px] text-emerald-600 font-medium mt-0.5">"{chore.parentFeedback}"</div>
-                        )}
-                      </div>
+                    )}
+                  </div>
                       <span className="font-bold text-emerald-600 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-md">
                         +{chore.finalPoints || chore.points} 🪙
                       </span>
@@ -1293,7 +1407,7 @@ export default function KidDashboard({
                 return (
                   <div 
                     key={item.id}
-                    className={`rounded-2xl sm:rounded-3xl p-2.5 sm:p-5 flex flex-col justify-between gap-2.5 sm:gap-4 transition-all relative overflow-hidden ${
+                    className={`rounded-2xl sm:rounded-3xl p-2.5 sm:p-5 flex flex-col justify-between gap-2.5 sm:gap-4 transition-all duration-300 relative overflow-hidden hover:scale-[1.02] hover:-translate-y-1 ${
                       (item.discountPercentage && item.discountUntil && (new Date(item.discountUntil?.toDate ? item.discountUntil.toDate() : item.discountUntil).getTime() > Date.now()))
                         ? "bg-rose-50 border-2 border-rose-500 shadow-md hover:shadow-rose-200" 
                         : "bg-white border border-slate-200/80 shadow-xs hover:shadow-sm"
@@ -1329,8 +1443,8 @@ export default function KidDashboard({
                               ⏳ До {new Date(item.discountUntil?.toDate ? item.discountUntil.toDate() : item.discountUntil).toLocaleString("ru-RU", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"})}
                             </div>
                           </div>
-                        )}
-                      </div>
+                    )}
+                  </div>
 
                       <div className="space-y-0.5">
                         <h4 className="font-extrabold text-slate-800 text-xs sm:text-sm leading-tight truncate">{item.title}</h4>
@@ -1361,7 +1475,7 @@ export default function KidDashboard({
                       
                       <button
                         onClick={() => setConfirmPurchaseItem(item)}
-                        className={`w-full sm:w-auto py-1.5 sm:py-2 px-2.5 sm:px-4 text-[10px] sm:text-xs font-black rounded-lg sm:rounded-xl transition-all shadow-2xs flex items-center justify-center gap-1 cursor-pointer ${
+                        className={`flex-1 py-1.5 sm:py-2 px-2 sm:px-3 text-[10px] sm:text-xs font-black rounded-lg sm:rounded-xl transition-all shadow-sm flex items-center justify-center gap-1 cursor-pointer ${
                           (() => {
                             const isDiscounted = item.discountPercentage && item.discountUntil && (new Date(item.discountUntil?.toDate ? item.discountUntil.toDate() : item.discountUntil).getTime() > Date.now());
                             const finalPrice = isDiscounted ? Math.max(1, Math.floor(item.points * (1 - item.discountPercentage / 100))) : item.points;
@@ -1374,6 +1488,23 @@ export default function KidDashboard({
                         <Gift className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
                         Купить
                       </button>
+                      {kids.length > 0 && !item.isChest && (
+                        <button
+                          onClick={() => setGiftPurchaseItem(item)}
+                          className={`flex-1 py-1.5 sm:py-2 px-2 sm:px-3 text-[10px] sm:text-xs font-black rounded-lg sm:rounded-xl transition-all shadow-sm flex items-center justify-center gap-1 cursor-pointer ${
+                          (() => {
+                            const isDiscounted = item.discountPercentage && item.discountUntil && (new Date(item.discountUntil?.toDate ? item.discountUntil.toDate() : item.discountUntil).getTime() > Date.now());
+                            const finalPrice = isDiscounted ? Math.max(1, Math.floor(item.points * (1 - item.discountPercentage / 100))) : item.points;
+                            return currentUser.points < finalPrice;
+                          })()
+                            ? "bg-slate-100 text-slate-400 border border-slate-200/50"
+                            : `${palette.bg} ${palette.hover} text-white`
+                         ? "bg-slate-100 text-slate-400 border border-slate-200/50" : "bg-sky-500 hover:bg-sky-600 text-white"}`}
+                        >
+                          <Gift className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                          Подарить
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -1552,8 +1683,8 @@ export default function KidDashboard({
                     )}
                   </div>
                 </div>
-              );
-            })}
+                );
+              })}
           </div>
         </div>
       )}
@@ -1590,9 +1721,21 @@ export default function KidDashboard({
                   <span className="text-xs font-extrabold text-amber-700 bg-amber-50 px-3 py-1 rounded-full border border-amber-100">
                     🪙 {currentUser.points} монет
                   </span>
-                  <span className="text-xs font-extrabold text-orange-700 bg-orange-50 px-3 py-1 rounded-full border border-orange-100">
-                    🔥 {currentUser.dailyStreak} дней подряд
-                  </span>
+                  <div className="flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-orange-100 to-rose-50 border border-orange-200 rounded-full shadow-sm" title="Ваша серия выполнения заданий!">
+                    <motion.div 
+                      animate={{ scale: [1, 1.2, 1], rotate: [-5, 5, -5] }} 
+                      transition={{ duration: 2, repeat: Infinity }}
+                      className="text-orange-500 text-sm"
+                    >
+                      🔥
+                    </motion.div>
+                    <span className="text-xs font-black text-orange-800">
+                      {currentUser.dailyStreak || 0} {
+                        (currentUser.dailyStreak || 0) % 10 === 1 && (currentUser.dailyStreak || 0) % 100 !== 11 ? 'день' :
+                        [2, 3, 4].includes((currentUser.dailyStreak || 0) % 10) && ![12, 13, 14].includes((currentUser.dailyStreak || 0) % 100) ? 'дня' : 'дней'
+                      } подряд
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1610,7 +1753,7 @@ export default function KidDashboard({
                   </button>
                 </div>
                 <div className="grid grid-cols-8 gap-2 bg-white p-3 rounded-xl border border-slate-200">
-                  {["🦊", "🦁", "🐯", "🐼", "🐨", "🐻", "🐶", "🐱", "🐰", "🐵", "🐸", "🐷", "🦖", "🦄", "🐙", "🦀", "🐝", "🦋", "🍄", "🌻", "🌈", "🍕", "🍔", "🍦"].map((av) => (
+                  {["🦊", "🦁", "🐯", "🐼", "🦄", "🦖", "🐙", "🤖", "👾", "👽", "👻", "🤡", "🦸", "🦹", "🧙", "🧛", "🧜", "🧞", "🧟", "🚀", "🛸", "🚁", "🚗", "🏎️", "⚽", "🏀", "🏈", "🎮", "🕹️", "🎸", "💎", "🔮", "🔥", "⚡", "🌟"].map((av) => (
                     <button
                       key={av}
                       onClick={async () => {
@@ -1813,8 +1956,8 @@ export default function KidDashboard({
                   <div className="text-center p-4 text-slate-400 text-xs font-medium bg-slate-50 rounded-2xl border border-dashed border-slate-200">
                     Здесь пока нет вопросов.
                   </div>
-                )}
-              </div>
+                    )}
+                  </div>
             </div>
           </div>
         </div>
@@ -1825,16 +1968,23 @@ export default function KidDashboard({
           {/* Transaction History Log */}
 
             <div className="space-y-3 pt-4 border-t border-slate-100">
-              <h4 className="text-xs font-black text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-                📈 История операций (баланс)
-              </h4>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <h4 className="text-xs font-black text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                  📈 История операций (баланс)
+                </h4>
+                <div className="flex bg-slate-100 p-1 rounded-xl">
+                  <button onClick={() => setHistoryFilter("all")} className={`flex-1 sm:flex-none px-3 py-1.5 text-[10px] font-black rounded-lg transition-all ${historyFilter === "all" ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>Все</button>
+                  <button onClick={() => setHistoryFilter("income")} className={`flex-1 sm:flex-none px-3 py-1.5 text-[10px] font-black rounded-lg transition-all ${historyFilter === "income" ? "bg-white text-emerald-600 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>Зачисления</button>
+                  <button onClick={() => setHistoryFilter("expense")} className={`flex-1 sm:flex-none px-3 py-1.5 text-[10px] font-black rounded-lg transition-all ${historyFilter === "expense" ? "bg-white text-rose-600 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>Траты</button>
+                </div>
+              </div>
               <div className="border border-slate-100 rounded-2xl overflow-hidden divide-y divide-slate-100 bg-slate-50">
-                {transactions.filter(t => t.kidId === currentUser.id).length === 0 ? (
+                {transactions.filter(t => t.kidId === currentUser.id).filter(t => historyFilter === "all" ? true : t.type === historyFilter).length === 0 ? (
                   <div className="p-8 text-center text-xs text-slate-400 font-semibold bg-white">
                     История операций пуста. Зарабатывайте монеты на квестах! 💪
                   </div>
                 ) : (
-                  transactions.filter(t => t.kidId === currentUser.id).map((tx) => {
+                  transactions.filter(t => t.kidId === currentUser.id).filter(t => historyFilter === "all" ? true : t.type === historyFilter).map((tx) => {
                     const isIncome = tx.type === "income";
                     let dateStr = "Неизвестно";
                     if (tx.createdAt) {
@@ -1863,8 +2013,8 @@ export default function KidDashboard({
                           {isIncome ? "+" : "-"}{tx.amount} 🪙
                         </span>
                       </div>
-                    );
-                  })
+                );
+              })
                 )}
               </div>
             </div>
@@ -1997,6 +2147,146 @@ export default function KidDashboard({
 
       
       
+
+      {/* SYSTEM UPDATE MODAL */}
+      <AnimatePresence>
+        {showUpdateModal && (
+          <div className="fixed inset-0 bg-indigo-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 sm:p-6">
+            <motion.div
+              initial={{ opacity: 0, y: 50, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col"
+              style={{ maxHeight: '85vh' }}
+            >
+              <div className="bg-gradient-to-br from-indigo-500 to-purple-600 p-6 sm:p-8 text-center text-white relative shrink-0">
+                <div className="absolute top-0 left-0 w-full h-full overflow-hidden opacity-20 pointer-events-none">
+                  <div className="absolute w-40 h-40 bg-white rounded-full mix-blend-overlay filter blur-3xl -top-10 -left-10 animate-pulse"></div>
+                  <div className="absolute w-40 h-40 bg-purple-300 rounded-full mix-blend-overlay filter blur-3xl bottom-0 right-0 animate-pulse" style={{ animationDelay: '1s' }}></div>
+                </div>
+                <Sparkles className="w-12 h-12 sm:w-16 sm:h-16 mx-auto mb-4 text-indigo-100" />
+                <h2 className="text-2xl sm:text-3xl font-black mb-2 relative z-10 tracking-tight">Обновление Системы!</h2>
+                <h3 className="text-indigo-100 font-bold text-sm sm:text-base relative z-10">{showUpdateModal.title}</h3>
+              </div>
+              
+              <div 
+                className="p-6 sm:p-8 overflow-y-auto grow text-slate-600 leading-relaxed space-y-4"
+                onScroll={(e) => {
+                  const target = e.target as HTMLElement;
+                  if (target.scrollHeight - target.scrollTop <= target.clientHeight + 20) {
+                    setHasScrolledUpdate(true);
+                  }
+                }}
+              >
+                <div className="prose prose-sm sm:prose-base max-w-none text-slate-600 whitespace-pre-wrap font-medium">
+                  {showUpdateModal.text}
+                </div>
+                
+                <div className="mt-8 p-4 bg-indigo-50 rounded-2xl border border-indigo-100 text-center">
+                  <p className="text-xs font-bold text-indigo-400">
+                    {!hasScrolledUpdate ? "↓ Пролистайте до конца, чтобы продолжить ↓" : "✅ Вы ознакомились с обновлением!"}
+                  </p>
+                </div>
+              </div>
+
+              <div className="p-4 sm:p-6 bg-slate-50 border-t border-slate-100 shrink-0">
+                <button
+                  onClick={handleCloseUpdate}
+                  disabled={!hasScrolledUpdate}
+                  className={`w-full py-4 text-white font-black rounded-2xl text-sm sm:text-base transition-all shadow-lg flex items-center justify-center gap-2 ${
+                    hasScrolledUpdate 
+                      ? "bg-indigo-600 hover:bg-indigo-700 hover:shadow-indigo-200 hover:-translate-y-0.5 cursor-pointer" 
+                      : "bg-slate-300 cursor-not-allowed opacity-70"
+                  }`}
+                >
+                  {hasScrolledUpdate ? "Понятно, круто! 🚀" : "Прочитайте обновления"}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* GIFT CONFIRMATION MODAL */}
+      <AnimatePresence>
+        {giftPurchaseItem && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl border border-slate-100 text-center space-y-4"
+            >
+              <div className="inline-flex p-4 bg-sky-50 rounded-full text-sky-500 text-4xl shadow-inner animate-bounce">
+                {giftPurchaseItem.image.startsWith("http") ? "🎁" : giftPurchaseItem.image}
+              </div>
+              
+              <div className="space-y-1">
+                <h4 className="font-extrabold text-slate-800 text-base">Подарить товар</h4>
+                <p className="text-slate-500 text-xs leading-normal">
+                  Вы собираетесь купить <b>{giftPurchaseItem.title}</b> в подарок! Цена: <span className="font-bold text-amber-600">🪙 {
+                    (giftPurchaseItem.discountPercentage && giftPurchaseItem.discountUntil && (new Date(giftPurchaseItem.discountUntil?.toDate ? giftPurchaseItem.discountUntil.toDate() : giftPurchaseItem.discountUntil).getTime() > Date.now())) 
+                    ? Math.max(1, Math.floor(giftPurchaseItem.points * (1 - giftPurchaseItem.discountPercentage / 100))) 
+                    : giftPurchaseItem.points
+                  } монет</span>.
+                </p>
+              </div>
+
+              <div className="text-left space-y-2">
+                <label className="block text-[10px] font-bold text-slate-400 uppercase">Кому подарить?</label>
+                <select 
+                  value={giftTargetId}
+                  onChange={e => setGiftTargetId(e.target.value)}
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-1 focus:ring-sky-500"
+                >
+                  <option value="">-- Выберите брата / сестру --</option>
+                  {kids.map(k => (
+                    <option key={k.id} value={k.id}>{k.avatar} {k.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {giftPurchaseItem.requiresInput && (
+                <div className="text-left space-y-1 mt-2">
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase">{giftPurchaseItem.inputLabel || "Данные для покупки"}</label>
+                  <p className="text-[9px] text-slate-400 leading-tight">Заполните данные для получателя.</p>
+                  <input
+                    type="text"
+                    value={purchaseCustomInput}
+                    onChange={(e) => setPurchaseCustomInput(e.target.value)}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-sky-500"
+                    placeholder="Введите данные для покупки..."
+                  />
+                </div>
+              )}
+
+              <div className="flex gap-2.5 pt-2">
+                <button
+                  onClick={() => {
+                    setGiftPurchaseItem(null);
+                    setGiftTargetId("");
+                    setPurchaseCustomInput("");
+                  }}
+                  className="flex-1 py-3 bg-slate-50 hover:bg-slate-100 text-slate-500 border border-slate-200 font-bold rounded-2xl text-xs transition-all cursor-pointer"
+                >
+                  Отмена
+                </button>
+                <button
+                  onClick={() => {
+                    if (!loading && giftTargetId) {
+                      handleGiftItem();
+                    }
+                  }}
+                  disabled={loading || !giftTargetId}
+                  className={`flex-1 py-3 bg-sky-500 hover:bg-sky-600 text-white font-bold rounded-2xl text-xs transition-all shadow-sm ${loading || !giftTargetId ? 'opacity-50 grayscale cursor-not-allowed' : 'cursor-pointer'}`}
+                >
+                  {loading ? 'Обработка...' : 'Подарить! 🎁'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* PURCHASE CONFIRMATION MODAL */}
       <AnimatePresence>
@@ -2166,7 +2456,7 @@ export default function KidDashboard({
                           <span>{rpsResult.bot === "rock" ? "✊" : rpsResult.bot === "paper" ? "🖐️" : "✌️"}</span>
                         </div>
                         <div className={`text-xl font-black mb-4 ${rpsResult.outcome === "win" ? "text-emerald-500" : rpsResult.outcome === "lose" ? "text-rose-500" : "text-amber-500"}`}>
-                          {rpsResult.outcome === "win" ? `+${gameBet} 🪙 ВЫИГРЫШ!` : rpsResult.outcome === "lose" ? `-${gameBet} 🪙 ПРОИГРЫШ` : "НИЧЬЯ"}
+                          {rpsResult.outcome === "win" ? `+${gameBet * 2} 🪙 ВЫИГРЫШ!` : rpsResult.outcome === "lose" ? `-${gameBet} 🪙 ПРОИГРЫШ` : "НИЧЬЯ"}
                         </div>
                         <button onClick={() => setRpsResult(null)} className="w-full py-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-xl cursor-pointer transition-colors">
                           Сыграть еще раз
@@ -2190,7 +2480,7 @@ export default function KidDashboard({
                           <span className="text-amber-500">{coinResult.bot === "heads" ? "🦅 Орел" : "🪙 Решка"}</span>
                         </div>
                         <div className={`text-xl font-black mb-4 ${coinResult.outcome === "win" ? "text-emerald-500" : "text-rose-500"}`}>
-                          {coinResult.outcome === "win" ? `+${gameBet} 🪙 ВЫИГРЫШ!` : `-${gameBet} 🪙 ПРОИГРЫШ`}
+                          {coinResult.outcome === "win" ? `+${gameBet * 2} 🪙 ВЫИГРЫШ!` : `-${gameBet} 🪙 ПРОИГРЫШ`}
                         </div>
                         <button onClick={() => setCoinResult(null)} className="w-full py-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-xl cursor-pointer transition-colors">
                           Сыграть еще раз
@@ -2271,25 +2561,30 @@ export default function KidDashboard({
               exit={{ opacity: 0, scale: 0.95 }}
               className="bg-white rounded-3xl overflow-hidden max-w-md w-full shadow-2xl border border-slate-100 flex flex-col max-h-[85vh]"
             >
-              <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-                <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
+              <div className="p-4 sm:p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between bg-slate-50 gap-3">
+                <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5 shrink-0">
                   <RotateCcw className="w-4 h-4 text-indigo-500" />
                   История операций (баланс)
                 </h3>
+                <div className="flex bg-slate-200/50 p-1 rounded-xl">
+                  <button onClick={() => setHistoryFilter("all")} className={`flex-1 sm:flex-none px-3 py-1.5 text-[10px] font-black rounded-lg transition-all ${historyFilter === "all" ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>Все</button>
+                  <button onClick={() => setHistoryFilter("income")} className={`flex-1 sm:flex-none px-3 py-1.5 text-[10px] font-black rounded-lg transition-all ${historyFilter === "income" ? "bg-white text-emerald-600 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>Зачисления</button>
+                  <button onClick={() => setHistoryFilter("expense")} className={`flex-1 sm:flex-none px-3 py-1.5 text-[10px] font-black rounded-lg transition-all ${historyFilter === "expense" ? "bg-white text-rose-600 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>Траты</button>
+                </div>
                 <button
                   onClick={() => setIsHistoryModalOpen(false)}
-                  className="p-1.5 hover:bg-slate-200 text-slate-400 hover:text-slate-700 rounded-lg text-xs font-bold cursor-pointer"
+                  className="absolute top-4 sm:top-5 right-4 sm:right-5 p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-400 hover:text-slate-700 rounded-lg text-xs font-bold cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
               <div className="p-5 overflow-y-auto space-y-3 bg-slate-50 divide-y divide-slate-100">
-                {transactions.filter(t => t.kidId === currentUser.id).length === 0 ? (
+                {transactions.filter(t => t.kidId === currentUser.id).filter(t => historyFilter === "all" ? true : t.type === historyFilter).length === 0 ? (
                   <div className="p-8 text-center text-xs text-slate-400 font-semibold bg-white rounded-2xl border border-slate-100">
                     История операций пуста. Зарабатывайте монеты на квестах! 💪
                   </div>
                 ) : (
-                  transactions.filter(t => t.kidId === currentUser.id).sort((a, b) => b.createdAt.toMillis() - a.createdAt.toMillis()).map((tx) => {
+                  transactions.filter(t => t.kidId === currentUser.id).filter(t => historyFilter === "all" ? true : t.type === historyFilter).sort((a, b) => b.createdAt.toMillis() - a.createdAt.toMillis()).map((tx) => {
                     const isIncome = tx.type === "income";
                     let dateStr = "Неизвестно";
                     if (tx.createdAt) {
@@ -2312,8 +2607,8 @@ export default function KidDashboard({
                           {isIncome ? "+" : "-"}{tx.amount} 🪙
                         </span>
                       </div>
-                    );
-                  })
+                );
+              })
                 )}
               </div>
             </motion.div>

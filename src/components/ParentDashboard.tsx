@@ -175,7 +175,12 @@ export default function ParentDashboard({
         pinned: editItemPinned,
         hidden: editItemHidden,
         discountPercentage,
-        discountUntil
+        discountUntil,
+        requiresInput: editItemRequiresInput,
+        inputLabel: editItemInputLabel,
+        isChest: editItemIsChest,
+        chestMin: Number(editItemChestMin),
+        chestMax: Number(editItemChestMax)
       });
       setEditingItemId(null);
       showAlert("Успешно 🎉", "Товар в магазине успешно обновлен!");
@@ -524,7 +529,12 @@ export default function ParentDashboard({
         hidden: itemHidden,
         sortOrder: maxSortOrder + 1,
         discountPercentage,
-        discountUntil
+        discountUntil,
+        requiresInput: itemRequiresInput,
+        inputLabel: itemInputLabel,
+        isChest: itemIsChest,
+        chestMin: Number(itemChestMin),
+        chestMax: Number(itemChestMax)
       };
 
       await setDoc(doc(db, "marketplace", itemId), newItem);

@@ -4,7 +4,7 @@ import { db } from "../firebase";
 import { doc, setDoc, updateDoc, deleteDoc, collection, getDocs, writeBatch } from "firebase/firestore";
 import { 
   Users, Bot, Palette, Plus, Trash2, RefreshCw, Bell, Sparkles, HelpCircle, 
-  Check, Save, ArrowRight, UserPlus, Settings2, Info, Compass, Pencil, Image, Upload, Tag, X, Send, Ticket, Trophy, Gift
+  Check, Save, ArrowRight, UserPlus, Settings2, Info, Compass, Pencil, Image, Upload, Tag, X, Send, Ticket, Trophy, Gift, Rocket
 } from "lucide-react";
 import { motion } from "motion/react";
 import { 
@@ -25,7 +25,7 @@ interface AdminPanelProps {
 }
 
 export default function AdminPanel({ currentUser, users, settings, onUpdateSettings, primaryColor, showAlert, showConfirm }: AdminPanelProps) {
-  const [activeTab, setActiveTab] = useState<"users" | "telegram" | "branding" | "system" | "notifications" | "faq" | "categories" | "promo" | "achievements">("users");
+  const [activeTab, setActiveTab] = useState<"users" | "telegram" | "branding" | "system" | "notifications" | "faq" | "categories" | "promo" | "achievements" | "updates">("users");
   const [loading, setLoading] = useState(false);
   
   // Create user form state
