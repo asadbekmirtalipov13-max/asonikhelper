@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { AppNotification, Chore, FamilyUser, MarketItem, Purchase, SiteSettings, Transaction } from "../types";
 import { db } from "../firebase";
-import { doc, updateDoc, setDoc, getDoc, collection, addDoc } from "firebase/firestore";
+import { doc, updateDoc, setDoc, getDoc, collection, addDoc, increment } from "firebase/firestore";
 import { 
   Sparkles, Award, Clock, Camera, Check, ShoppingBag, 
   Trash2, Flame, Gift, Compass, ShieldAlert, CheckCircle, 
@@ -899,11 +899,16 @@ export default function KidDashboard({
       return;
     }
     
-    const todayGameTxs = transactions.filter(t => t.kidId === currentUser.id && t.type === "expense" && t.description?.includes("Суефа"));
+    const todayGameTxs = transactions.filter(t => {
+      if (t.kidId !== currentUser.id || t.type !== "expense" || !(t.description?.includes("Суефа") || t.title?.includes("Суефа"))) return false;
+      if (!t.createdAt) return false;
+      const d = t.createdAt.toDate ? t.createdAt.toDate() : new Date(t.createdAt);
+      return d.toDateString() === new Date().toDateString();
+    });
     const spentToday = todayGameTxs.reduce((sum, t) => sum + t.amount, 0);
     
-    if (spentToday + gameBet > 50) {
-      showAlert("Лимит исчерпан", "Максимум 50 монет в день на эту игру! Возвращайся завтра.");
+    if (spentToday + gameBet > 30) {
+      showAlert("Лимит исчерпан", `Максимум 30 монет в день на эту игру! Осталось ${Math.max(0, 30 - spentToday)} монет.`);
       return;
     }
 
@@ -931,15 +936,15 @@ export default function KidDashboard({
       try {
         if (outcome === "win") {
           await updateDoc(doc(db, "users", currentUser.id), {
-            points: increment(gameBet * 2)
+            points: increment(Math.floor(gameBet * 1.5))
           });
           await addDoc(collection(db, "transactions"), {
             kidId: currentUser.id,
             type: "income",
-            amount: gameBet * 2,
-            description: "Победа в игре (Суефа) - Удвоение!",
+            amount: Math.floor(gameBet * 1.5),
+            title: "Победа в игре (Суефа)", description: "Победа в игре (Суефа) - 1.5x!",
             createdAt: new Date(),
-            balanceAfter: currentUser.points + (gameBet * 2)
+            balanceAfter: currentUser.points + (Math.floor(gameBet * 1.5))
           });
         } else if (outcome === "lose") {
           await updateDoc(doc(db, "users", currentUser.id), {
@@ -949,7 +954,7 @@ export default function KidDashboard({
             kidId: currentUser.id,
             type: "expense",
             amount: gameBet,
-            description: "Проигрыш в игре (Суефа)",
+            title: "Проигрыш в игре (Суефа)", description: "Проигрыш в игре (Суефа)",
             createdAt: new Date(),
             balanceAfter: currentUser.points - gameBet
           });
@@ -968,11 +973,16 @@ export default function KidDashboard({
       return;
     }
     
-    const todayGameTxs = transactions.filter(t => t.kidId === currentUser.id && t.type === "expense" && t.description?.includes("Орел"));
+    const todayGameTxs = transactions.filter(t => {
+      if (t.kidId !== currentUser.id || t.type !== "expense" || !(t.description?.includes("Орел") || t.title?.includes("Орел"))) return false;
+      if (!t.createdAt) return false;
+      const d = t.createdAt.toDate ? t.createdAt.toDate() : new Date(t.createdAt);
+      return d.toDateString() === new Date().toDateString();
+    });
     const spentToday = todayGameTxs.reduce((sum, t) => sum + t.amount, 0);
     
-    if (spentToday + gameBet > 50) {
-      showAlert("Лимит исчерпан", "Максимум 50 монет в день на эту игру! Возвращайся завтра.");
+    if (spentToday + gameBet > 30) {
+      showAlert("Лимит исчерпан", `Максимум 30 монет в день на эту игру! Осталось ${Math.max(0, 30 - spentToday)} монет.`);
       return;
     }
 
@@ -989,15 +999,15 @@ export default function KidDashboard({
       try {
         if (outcome === "win") {
           await updateDoc(doc(db, "users", currentUser.id), {
-            points: increment(gameBet * 2)
+            points: increment(Math.floor(gameBet * 1.5))
           });
           await addDoc(collection(db, "transactions"), {
             kidId: currentUser.id,
             type: "income",
-            amount: gameBet * 2,
-            description: "Победа в игре (Орел или Решка) - Удвоение!",
+            amount: Math.floor(gameBet * 1.5),
+            title: "Победа в игре (Орел", description: "Победа в игре (Орел или Решка) - 1.5x!",
             createdAt: new Date(),
-            balanceAfter: currentUser.points + (gameBet * 2)
+            balanceAfter: currentUser.points + (Math.floor(gameBet * 1.5))
           });
         } else {
           await updateDoc(doc(db, "users", currentUser.id), {
@@ -1007,7 +1017,7 @@ export default function KidDashboard({
             kidId: currentUser.id,
             type: "expense",
             amount: gameBet,
-            description: "Проигрыш в игре (Орел или Решка)",
+            title: "Проигрыш в игре (Орел", description: "Проигрыш в игре (Орел или Решка)",
             createdAt: new Date(),
             balanceAfter: currentUser.points - gameBet
           });
@@ -1997,7 +2007,7 @@ export default function KidDashboard({
                     return (
                       <div key={tx.id} className="p-3 bg-white hover:bg-slate-50/50 transition-colors flex justify-between items-center gap-3 text-xs">
                         <div className="space-y-0.5 truncate text-left">
-                          <div className="font-extrabold text-slate-700 truncate">{tx.title}</div>
+                          <div className="font-extrabold text-slate-700 truncate">{tx.title || tx.description}</div>
                           <div className="text-[9px] text-slate-400 flex items-center gap-1.5 font-bold">
                             <span>{dateStr}</span>
                             <span>•</span>
@@ -2455,7 +2465,7 @@ export default function KidDashboard({
                           <span>{rpsResult.bot === "rock" ? "✊" : rpsResult.bot === "paper" ? "🖐️" : "✌️"}</span>
                         </div>
                         <div className={`text-xl font-black mb-4 ${rpsResult.outcome === "win" ? "text-emerald-500" : rpsResult.outcome === "lose" ? "text-rose-500" : "text-amber-500"}`}>
-                          {rpsResult.outcome === "win" ? `+${gameBet * 2} 🪙 ВЫИГРЫШ!` : rpsResult.outcome === "lose" ? `-${gameBet} 🪙 ПРОИГРЫШ` : "НИЧЬЯ"}
+                          {rpsResult.outcome === "win" ? `+${Math.floor(gameBet * 1.5)} 🪙 ВЫИГРЫШ!` : rpsResult.outcome === "lose" ? `-${gameBet} 🪙 ПРОИГРЫШ` : "НИЧЬЯ"}
                         </div>
                         <button onClick={() => setRpsResult(null)} className="w-full py-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-xl cursor-pointer transition-colors">
                           Сыграть еще раз
@@ -2479,7 +2489,7 @@ export default function KidDashboard({
                           <span className="text-amber-500">{coinResult.bot === "heads" ? "🦅 Орел" : "🪙 Решка"}</span>
                         </div>
                         <div className={`text-xl font-black mb-4 ${coinResult.outcome === "win" ? "text-emerald-500" : "text-rose-500"}`}>
-                          {coinResult.outcome === "win" ? `+${gameBet * 2} 🪙 ВЫИГРЫШ!` : `-${gameBet} 🪙 ПРОИГРЫШ`}
+                          {coinResult.outcome === "win" ? `+${Math.floor(gameBet * 1.5)} 🪙 ВЫИГРЫШ!` : `-${gameBet} 🪙 ПРОИГРЫШ`}
                         </div>
                         <button onClick={() => setCoinResult(null)} className="w-full py-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-xl cursor-pointer transition-colors">
                           Сыграть еще раз

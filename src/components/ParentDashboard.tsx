@@ -249,7 +249,7 @@ export default function ParentDashboard({
         kidAvatar: kid?.avatar || "👦",
         kidBalance: kid?.points || 0,
         type: "expense",
-        title: p.productTitle,
+        title: p.giftedBy ? `${p.productTitle} (Подарок от ${p.giftedBy})` : p.productTitle,
         points: p.points,
         status: p.status === "issued" ? "Вручено" : "Ожидает"
       };
@@ -1636,7 +1636,7 @@ export default function ParentDashboard({
                             <span>{tx.kidName}</span>
                           </td>
                           <td className="p-3.5">
-                            <div className="font-bold text-slate-700">{tx.title}</div>
+                            <div className="font-bold text-slate-700">{tx.title || tx.description || 'Транзакция'}</div>
                             <div className="text-[9px] text-slate-400 mt-0.5">
                               {tx.type === "income" ? "🏆 За выполненный квест" : "🎁 Заказан приз в магазине"}
                             </div>

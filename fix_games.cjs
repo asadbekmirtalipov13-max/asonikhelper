@@ -1,12 +1,14 @@
 const fs = require('fs');
-let content = fs.readFileSync('src/components/KidDashboard.tsx', 'utf8');
+let kidDashContent = fs.readFileSync('src/components/KidDashboard.tsx', 'utf8');
 
-content = content.replace(/points: increment\(gameBet\)/g, 'points: increment(gameBet * 2)');
-content = content.replace(/amount: gameBet/g, 'amount: gameBet'); // Wait, let's fix amount too
-content = content.replace(/description: "Победа в игре \(Суефа\)"/g, 'description: "Победа в игре (Суефа) - Удвоение!"');
-content = content.replace(/balanceAfter: currentUser\.points \+ gameBet/g, 'balanceAfter: currentUser.points + (gameBet * 2)');
+// Add increment to imports
+kidDashContent = kidDashContent.replace(/import \{ doc, updateDoc, setDoc, getDoc, collection, addDoc \} from "firebase\/firestore";/, 'import { doc, updateDoc, setDoc, getDoc, collection, addDoc, increment } from "firebase/firestore";');
 
-// Fix handlePlayCoin amount
-content = content.replace(/amount: gameBet \} \}/g, 'amount: gameBet } }'); // this is hard to replace accurately.
+// Replace gameBet * 2 with Math.floor(gameBet * 1.5)
+kidDashContent = kidDashContent.replace(/gameBet \* 2/g, 'Math.floor(gameBet * 1.5)');
 
-fs.writeFileSync('src/components/KidDashboard.tsx', content);
+// Fix text description to match
+kidDashContent = kidDashContent.replace(/Победа в игре \(Суефа\) - Удвоение!/g, 'Победа в игре (Суефа) - 1.5x!');
+kidDashContent = kidDashContent.replace(/Победа в игре \(Орел или Решка\) - Удвоение!/g, 'Победа в игре (Орел или Решка) - 1.5x!');
+
+fs.writeFileSync('src/components/KidDashboard.tsx', kidDashContent);
