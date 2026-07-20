@@ -36,6 +36,7 @@ export default function App() {
   // Admin routing state: parents can toggle between dashboard and settings
   const [currentView, setCurrentView] = useState<"dashboard" | "admin" | "store">("dashboard");
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const [globalLoading, setGlobalLoading] = useState(false);
   const [openingChest, setOpeningChest] = useState<any>(null);
   const [kidActiveTab, setKidActiveTab] = useState<"quests" | "store" | "daily" | "profile" | "history" | "achievements" | "games">("quests");
   const [dbLoading, setDbLoading] = useState(true);
@@ -240,6 +241,7 @@ export default function App() {
     if (!notification.chestPoints || chestIsOpening) return;
     setChestIsOpening(true);
     setOpeningChest(notification);
+    setGlobalLoading(true);
     
     // Fake animation delay
     await new Promise(resolve => setTimeout(resolve, 2000));
@@ -269,6 +271,55 @@ export default function App() {
       showAlert("ОТКРЫТ СУНДУК! 🎉", `Вы открыли сундук и нашли там ${reward} монет!`);
     } finally {
       setChestIsOpening(false);
+      setGlobalLoading(false);
+    }
+  };
+
+  const handleClaimReward = async (notif: AppNotification) => {
+    if (!currentUser || notif.read) return;
+    setChestIsOpening(true);
+    setGlobalLoading(true);
+    try {
+      const kidRef = doc(db, "users", currentUser.id);
+      let newBalance = currentUser.points;
+      
+      if (notif.rewardPoints) {
+        newBalance += notif.rewardPoints;
+      }
+      
+      const updates: any = {
+        points: newBalance
+      };
+      
+      if (notif.rewardChest) {
+        updates.chestsCount = increment(1);
+      }
+      
+      await updateDoc(kidRef, updates);
+      await updateDoc(doc(db, "notifications", notif.id), { read: true });
+      
+      if (notif.rewardPoints) {
+        const txId = "tx-notif-reward-" + Math.random().toString(36).substr(2, 9);
+        await setDoc(doc(db, "transactions", txId), {
+          id: txId,
+          kidId: currentUser.id,
+          kidName: currentUser.name,
+          type: "income",
+          amount: notif.rewardPoints,
+          title: `Награда: ${notif.title}`,
+          createdAt: new Date(),
+          balanceAfter: newBalance
+        });
+      }
+      
+      fireConfetti();
+      showAlert("Получено! 🎁", `Вы успешно забрали награду!${notif.rewardPoints ? ` (+${notif.rewardPoints} монет)` : ""}${notif.rewardChest ? ` (+1 Сундук!)` : ""}`);
+    } catch (err) {
+      console.error(err);
+      showAlert("Ошибка", "Не удалось забрать награду.");
+    } finally {
+      setChestIsOpening(false);
+      setGlobalLoading(false);
     }
   };
   
@@ -671,6 +722,16 @@ export default function App() {
                             <Sparkles className="w-3 h-3" /> {chestIsOpening ? 'Открываем...' : 'Открыть Сундук!'}
                           </button>
                         )}
+
+                        {n.type === "achievement_reward" && !n.read && (
+                          <button
+                            onClick={() => handleClaimReward(n)}
+                            disabled={chestIsOpening}
+                            className={`mt-2 w-full py-2 ${chestIsOpening ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 text-white hover:shadow-md hover:scale-[1.02] cursor-pointer'} font-black text-[10px] rounded-xl shadow-sm transition-all flex items-center justify-center gap-1`}
+                          >
+                            <Gift className="w-3 h-3" /> {chestIsOpening ? 'Загрузка...' : 'Забрать награду!'}
+                          </button>
+                        )}
                         
                         <div className="text-[8px] text-slate-300 font-bold mt-1 text-right">
                           {n.createdAt?.toDate ? n.createdAt.toDate().toLocaleString("ru-RU") : "Только что"}
@@ -710,6 +771,17 @@ export default function App() {
             Открываем сундук...
           </motion.h2>
           <p className="text-white/60 font-medium mt-2">Пожалуйста, подождите!</p>
+        </div>
+      )}
+
+      {globalLoading && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex flex-col items-center justify-center text-white">
+          <div className="relative mb-6">
+             <div className="absolute inset-0 bg-indigo-500 blur-3xl opacity-30 animate-pulse"></div>
+             <RefreshCw className="w-20 h-20 text-indigo-400 animate-spin relative z-10" />
+          </div>
+          <h2 className="text-2xl font-black mb-2 tracking-tight">Загрузка...</h2>
+          <p className="text-slate-300 font-bold animate-pulse">Пожалуйста, подождите 🪄</p>
         </div>
       )}
 

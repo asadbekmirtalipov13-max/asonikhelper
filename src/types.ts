@@ -11,6 +11,7 @@ export interface FamilyUser {
   createdBy?: string;
   dailyStreak: number;
   lastCheckIn?: string; // YYYY-MM-DD
+  lastShopChestClaimed?: string; // ISO string
   telegramChatId?: string; // Kid-specific or user-specific telegram chat/channel ID
   restoresUsedThisMonth?: number;
   lastRestoreMonth?: string;
@@ -51,6 +52,12 @@ export interface Chore {
   urgentNotified?: boolean;
   finalPoints?: number; // Actual points awarded by parent
   executionLimitMinutes?: number; // Completion time limit set by parent (defaults to 60)
+  isWeekly?: boolean;
+  weeklyDays?: {
+    day: number;
+    photoUrl: string;
+    timestamp: any;
+  }[];
 }
 
 export interface MarketItem {

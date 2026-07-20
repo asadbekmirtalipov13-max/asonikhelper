@@ -30,6 +30,45 @@ interface KidDashboardProps {
   setActiveTab?: (tab: "quests" | "store" | "daily" | "profile") => void;
 }
 
+const ChestCountdown = ({ nextClaim }: { nextClaim: number }) => {
+  const [timeLeft, setTimeLeft] = useState(Math.max(0, nextClaim - Date.now()));
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setTimeLeft(Math.max(0, nextClaim - Date.now()));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [nextClaim]);
+
+  if (timeLeft <= 0) return null;
+
+  const days = Math.floor(timeLeft / (1000 * 60 * 60 * 24));
+  const hours = Math.floor((timeLeft % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+  const minutes = Math.floor((timeLeft % (1000 * 60 * 60)) / (1000 * 60));
+  const seconds = Math.floor((timeLeft % (1000 * 60)) / 1000);
+
+  return (
+    <div className="flex gap-2 mt-4">
+      <div className="bg-white/20 backdrop-blur-md rounded-xl p-2 px-3 text-center min-w-[50px]">
+        <div className="text-[10px] uppercase font-black opacity-60">Дни</div>
+        <div className="text-sm font-black">{days}</div>
+      </div>
+      <div className="bg-white/20 backdrop-blur-md rounded-xl p-2 px-3 text-center min-w-[50px]">
+        <div className="text-[10px] uppercase font-black opacity-60">Час</div>
+        <div className="text-sm font-black">{hours}</div>
+      </div>
+      <div className="bg-white/20 backdrop-blur-md rounded-xl p-2 px-3 text-center min-w-[50px]">
+        <div className="text-[10px] uppercase font-black opacity-60">Мин</div>
+        <div className="text-sm font-black">{minutes}</div>
+      </div>
+      <div className="bg-white/20 backdrop-blur-md rounded-xl p-2 px-3 text-center min-w-[50px]">
+        <div className="text-[10px] uppercase font-black opacity-60">Сек</div>
+        <div className="text-sm font-black">{seconds}</div>
+      </div>
+    </div>
+  );
+};
+
 export default function KidDashboard({
   currentUser,
   kids = [],
@@ -245,8 +284,19 @@ export default function KidDashboard({
 
   const myNotifications = notifications.filter(n => n.kidId === currentUser.id);
   const unreadCount = myNotifications.filter(n => !n.read).length;
-  const sortedFilteredItems = marketItems
-    .filter(item => {
+  const sortedFilteredItems = [
+    // Special recurring chest
+    {
+      id: "shop-chest-5days",
+      title: "Сундук Удачи (Раз в 5 дней)",
+      description: "Бесплатный сундук! Открывай его каждые 5 дней и забирай от 1 до 50 монет!",
+      image: settings.chestImageUrl || "https://cdn-icons-png.flaticon.com/512/4342/4342728.png",
+      points: 0,
+      isSpecial: true,
+      category: "Сундуки"
+    },
+    ...marketItems
+      .filter(item => {
       if (item.hidden) return false;
       const matchesSearch = item.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
                             item.description.toLowerCase().includes(searchTerm.toLowerCase());
@@ -267,7 +317,8 @@ export default function KidDashboard({
       const tA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
       const tB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
       return tB - tA;
-    });
+    })
+  ];
 
   // 1. Daily Check-in Claim logic
   // Use GMT+5 for date tracking
@@ -633,36 +684,68 @@ export default function KidDashboard({
 
     setUploadProgress(true);
     try {
-      
       // 1. Upload Base64 image to IMGBB securely via server proxy
       let uploadedUrl = await uploadImageToImgbb(proofPhotoBase64);
       
-      // Fallback: If ImgBB fails, try to save the compressed base64 directly to Firestore!
       if (!uploadedUrl) {
          console.warn("ImgBB upload failed, falling back to direct base64 storage.");
-         // We must ensure it's compressed enough for Firestore (1MB limit)
-         // compressImageFile already resizes and compresses. 
          uploadedUrl = proofPhotoBase64;
       }
 
-      // 2. Save proof photo and update status in database
-
       const choreRef = doc(db, "chores", submittingChore.id);
-      await updateDoc(choreRef, {
-        status: "completed",
-        proofPhoto: uploadedUrl,
-        completedAt: new Date()
-      });
+      
+      if (submittingChore.isWeekly) {
+        const todayStr = `${new Date().getFullYear()}-${new Date().getMonth()+1}-${new Date().getDate()}`;
+        const newWeeklyDaysLogged = (submittingChore.weeklyDaysLogged || 0) + 1;
+        const newWeeklyPhotos = [...(submittingChore.weeklyPhotos || []), uploadedUrl];
+        
+        const updates: any = {
+          weeklyDaysLogged: newWeeklyDaysLogged,
+          weeklyPhotos: newWeeklyPhotos,
+          lastWeeklySubmission: todayStr
+        };
 
-      // 3. Send Telegram notify to Parent
-      if (settings.telegramChatId) {
-        await sendTelegramNotification(
-          `📸 <b>Отчет по заданию отправлен!</b>\nРебенок: ${currentUser.name} ${currentUser.avatar}\nКвест: <b>${submittingChore.title}</b>\n\n<i>Родители, пожалуйста, проверьте отчет и оцените старания!</i>`,
-          settings.telegramChatId
-        );
+        if (newWeeklyDaysLogged >= 7) {
+          updates.status = "completed";
+          updates.completedAt = new Date();
+        }
+
+        await updateDoc(choreRef, updates);
+
+        if (newWeeklyDaysLogged >= 7) {
+          if (settings.telegramChatId) {
+            await sendTelegramNotification(
+              `✅ <b>Еженедельный квест ЗАВЕРШЕН!</b>\nРебенок: ${currentUser.name} ${currentUser.avatar}\nКвест: <b>${submittingChore.title}</b>\n\n<i>Все 7 дней выполнены! Проверьте все фото и начислите итоговый балл!</i>`,
+              settings.telegramChatId
+            );
+          }
+          showAlert("Ура! 🚀", "Вы завершили еженедельный квест! Все 7 дней выполнены. Ждите проверки родителями!");
+        } else {
+          if (settings.telegramChatId) {
+            await sendTelegramNotification(
+              `📸 <b>Новое фото в еженедельном квесте!</b>\nРебенок: ${currentUser.name} ${currentUser.avatar}\nКвест: <b>${submittingChore.title}</b>\nДень: ${newWeeklyDaysLogged}/7`,
+              settings.telegramChatId
+            );
+          }
+          showAlert("Отлично! ✅", `Фото за день ${newWeeklyDaysLogged} принято! Возвращайтесь завтра.`);
+        }
+      } else {
+        await updateDoc(choreRef, {
+          status: "completed",
+          proofPhoto: uploadedUrl,
+          completedAt: new Date()
+        });
+
+        if (settings.telegramChatId) {
+          await sendTelegramNotification(
+            `📸 <b>Отчет по заданию отправлен!</b>\nРебенок: ${currentUser.name} ${currentUser.avatar}\nКвест: <b>${submittingChore.title}</b>\n\n<i>Родители, пожалуйста, проверьте отчет и оцените старания!</i>`,
+            settings.telegramChatId
+          );
+        }
+
+        showAlert("Ура! 🎉", "Отчет успешно отправлен родителям на проверку! Ожидайте баллов! 🪙");
       }
 
-      showAlert("Ура! 🎉", "Отчет успешно отправлен родителям на проверку! Ожидайте баллов! 🪙");
       setSubmittingChore(null);
       setProofPhotoBase64(null);
     } catch (err) {
@@ -827,33 +910,123 @@ export default function KidDashboard({
       
       await updateDoc(doc(db, "users", currentUser.id), updates);
       
-      if (ach.reward.points) {
-        const txId = "tx-ach-" + Math.random().toString(36).substr(2, 9);
+      const notifRef = doc(collection(db, "notifications"));
+      await setDoc(notifRef, {
+        kidId: currentUser.id,
+        type: "achievement_reward",
+        title: `🎁 Награда за: ${ach.title}`,
+        text: `Вы получили: ${ach.reward.points ? `${ach.reward.points} 🪙` : ""}${ach.reward.chest ? " и Сундук 📦" : ""}. Нажми чтобы забрать!`,
+        rewardPoints: ach.reward.points || 0,
+        rewardChest: ach.reward.chest || false,
+        achievementId: achId,
+        createdAt: new Date(),
+        read: false
+      });
+      
+      showAlert("Успешно отправлено! 🎉", "Проверьте уведомления!");
+      
+      fireConfetti();
+    } catch(err) {
+      console.error(err);
+      showAlert("Ошибка", "Не удалось отправить награду");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleClaimNotificationReward = async (notif: AppNotification) => {
+    if (loading || notif.read) return;
+    setLoading(true);
+    try {
+      const kidRef = doc(db, "users", currentUser.id);
+      let newBalance = currentUser.points;
+      
+      if (notif.rewardPoints) {
+        newBalance += notif.rewardPoints;
+      }
+      
+      const updates: any = {
+        points: newBalance
+      };
+      
+      if (notif.rewardChest) {
+        updates.chestsCount = increment(1);
+      }
+      
+      await updateDoc(kidRef, updates);
+      await updateDoc(doc(db, "notifications", notif.id), { read: true });
+      
+      if (notif.rewardPoints) {
+        const txId = "tx-notif-reward-" + Math.random().toString(36).substr(2, 9);
         await setDoc(doc(db, "transactions", txId), {
           id: txId,
           kidId: currentUser.id,
           kidName: currentUser.name,
           type: "income",
-          amount: ach.reward.points,
-          title: `Награда за достижение: ${ach.title}`,
+          amount: notif.rewardPoints,
+          title: `Награда из уведомления: ${notif.title}`,
           createdAt: new Date(),
           balanceAfter: newBalance
         });
       }
       
-      if (ach.reward.chest) {
-        const chestUpdates = { chestsCount: increment(1) };
-        await updateDoc(doc(db, "users", currentUser.id), chestUpdates);
-        showAlert("Ура!", `Награда за достижение получена!${ach.reward.points ? ` (+${ach.reward.points} монет)` : ""}${ach.reward.chest ? ` (+1 Сундук! Ищите его в магазине)` : ""}`);
-      } else {
-        showAlert("Ура!", `Награда за достижение получена! (+${ach.reward.points} монет)`);
-      }
-      
       fireConfetti();
-      showAlert("Успех!", "Награда за достижение получена!");
-    } catch(err) {
+      showAlert("Получено! 🎁", `Вы успешно забрали награду!${notif.rewardPoints ? ` (+${notif.rewardPoints} монет)` : ""}${notif.rewardChest ? ` (+1 Сундук!)` : ""}`);
+    } catch (err) {
       console.error(err);
-      showAlert("Ошибка", "Не удалось забрать награду");
+      showAlert("Ошибка", "Не удалось забрать награду.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOpenShopChest = async () => {
+    if (loading) return;
+    
+    const lastClaimed = currentUser.lastShopChestClaimed ? (currentUser.lastShopChestClaimed.toDate ? currentUser.lastShopChestClaimed.toDate() : new Date(currentUser.lastShopChestClaimed)) : null;
+    if (lastClaimed) {
+      const fiveDays = 5 * 24 * 60 * 60 * 1000;
+      if (Date.now() - lastClaimed.getTime() < fiveDays) {
+        showAlert("Ой!", "Вы уже забирали бесплатный сундук. Приходите позже!");
+        return;
+      }
+    }
+
+    setLoading(true);
+    setOpeningChest({ id: 'shop-chest', title: 'Бесплатный Сундук', isChest: true } as any);
+    
+    try {
+      // 2 seconds animation
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      const reward = Math.floor(Math.random() * 50) + 1;
+      const kidRef = doc(db, "users", currentUser.id);
+      
+      const newBalance = currentUser.points + reward;
+      await updateDoc(kidRef, { 
+        points: newBalance,
+        lastShopChestClaimed: new Date()
+      });
+      
+      const txId = "tx-shop-chest-" + Math.random().toString(36).substr(2, 9);
+      await setDoc(doc(db, "transactions", txId), {
+        id: txId,
+        kidId: currentUser.id,
+        kidName: currentUser.name,
+        type: "income",
+        amount: reward,
+        title: "Награда из бесплатного сундука",
+        createdAt: new Date(),
+        balanceAfter: newBalance
+      });
+      
+      setOpeningChest(null);
+      fireConfetti();
+      showAlert("Ура! 🎉", `Вы получили ${reward} монет из бесплатного сундука!`);
+    } catch (err) {
+      console.error(err);
+      showAlert("Ошибка", "Не удалось открыть сундук.");
+      setOpeningChest(null);
     } finally {
       setLoading(false);
     }
@@ -1001,6 +1174,51 @@ export default function KidDashboard({
 
   const [promoCode, setPromoCode] = useState("");
   const [promoLoading, setPromoLoading] = useState(false);
+
+  const handleClaimShopChest = async () => {
+    const lastClaimed = currentUser.lastShopChestClaimed ? (currentUser.lastShopChestClaimed.toDate ? currentUser.lastShopChestClaimed.toDate() : new Date(currentUser.lastShopChestClaimed)) : null;
+    const nowTime = new Date();
+    
+    if (lastClaimed) {
+      const diff = nowTime.getTime() - lastClaimed.getTime();
+      const fiveDaysInMs = 5 * 24 * 60 * 60 * 1000;
+      if (diff < fiveDaysInMs) {
+        showAlert("Рано!", "Этот сундук можно открывать раз в 5 дней.");
+        return;
+      }
+    }
+
+    setLoading(true);
+    try {
+      const reward = Math.floor(Math.random() * 50) + 1;
+      const newBalance = currentUser.points + reward;
+      
+      await updateDoc(doc(db, "users", currentUser.id), {
+        points: newBalance,
+        lastShopChestClaimed: new Date()
+      });
+
+      const txId = "tx-shop-chest-" + Math.random().toString(36).substr(2, 9);
+      await setDoc(doc(db, "transactions", txId), {
+        id: txId,
+        kidId: currentUser.id,
+        kidName: currentUser.name,
+        type: "income",
+        amount: reward,
+        title: "Бесплатный сундук из магазина",
+        createdAt: new Date(),
+        balanceAfter: newBalance
+      });
+
+      setOpeningChest({ reward });
+      fireConfetti();
+    } catch (err) {
+      console.error(err);
+      showAlert("Ошибка", "Не удалось открыть сундук.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   
     const handleActivatePromo = async () => {
@@ -1288,9 +1506,33 @@ export default function KidDashboard({
   };
 
   return (
-    <div className="space-y-6">
-      {/* Header Cards Bar */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+    <>
+      {/* Loading Overlay */}
+      <AnimatePresence>
+        {(loading || processingOrder || uploadProgress) && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-6"
+          >
+            <div className="bg-white rounded-3xl p-8 flex flex-col items-center gap-4 shadow-2xl max-w-xs w-full text-center">
+              <div className="relative">
+                <div className="w-16 h-16 border-4 border-indigo-100 border-t-indigo-600 rounded-full animate-spin"></div>
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <RefreshCw className="w-6 h-6 text-indigo-600" />
+                </div>
+              </div>
+              <div>
+                <h3 className="text-lg font-black text-slate-800">Подождите...</h3>
+                <p className="text-slate-500 text-sm font-bold mt-1">Загрузка данных</p>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <div className="max-w-6xl mx-auto px-4 pt-4 pb-24 md:pb-8 space-y-6">
         {/* Points Counter */}
         <div className="bg-gradient-to-br from-amber-400 via-yellow-500 to-orange-500 text-white rounded-3xl p-4 flex flex-col justify-between shadow-md relative overflow-hidden group">
           <div className="absolute -bottom-6 -right-6 text-7xl select-none opacity-15 group-hover:scale-110 transition-transform">🪙</div>
@@ -1603,6 +1845,64 @@ export default function KidDashboard({
       {/* STORE REWARDS VIEW */}
       {activeTab === "store" && (
         <div className="space-y-6">
+          {/* Recurring 5-day Chest */}
+          <motion.div 
+            initial={{ y: 20, opacity: 0 }} 
+            animate={{ y: 0, opacity: 1 }}
+            className={`rounded-3xl p-6 flex flex-col md:flex-row items-center gap-6 shadow-lg border-2 relative overflow-hidden ${
+              (() => {
+                const lastClaimed = currentUser.lastShopChestClaimed ? (currentUser.lastShopChestClaimed.toDate ? currentUser.lastShopChestClaimed.toDate() : new Date(currentUser.lastShopChestClaimed)) : null;
+                const fiveDays = 5 * 24 * 60 * 60 * 1000;
+                const canClaim = !lastClaimed || (Date.now() - lastClaimed.getTime() >= fiveDays);
+                return canClaim ? "bg-gradient-to-br from-indigo-500 to-purple-600 border-indigo-300 text-white" : "bg-slate-100 border-slate-200 text-slate-400 grayscale";
+              })()
+            }`}
+          >
+            <div className="relative group">
+              <Gift className={`w-20 h-20 md:w-24 md:h-24 ${
+                (() => {
+                  const lastClaimed = currentUser.lastShopChestClaimed ? (currentUser.lastShopChestClaimed.toDate ? currentUser.lastShopChestClaimed.toDate() : new Date(currentUser.lastShopChestClaimed)) : null;
+                  const fiveDays = 5 * 24 * 60 * 60 * 1000;
+                  const canClaim = !lastClaimed || (Date.now() - lastClaimed.getTime() >= fiveDays);
+                  return canClaim ? "animate-bounce" : "";
+                })()
+              }`} />
+              <div className="absolute inset-0 bg-white/20 rounded-full blur-2xl group-hover:bg-white/40 transition-all"></div>
+            </div>
+            
+            <div className="flex-1 text-center md:text-left space-y-2">
+              <h3 className="text-xl md:text-2xl font-black">СУНДУК УДАЧИ 🎁</h3>
+              <p className="text-xs md:text-sm font-bold opacity-90 max-w-sm">
+                Этот магический сундук даёт от <b>1 до 50 монет</b> совершенно бесплатно раз в 5 дней!
+              </p>
+              
+              {(() => {
+                const lastClaimed = currentUser.lastShopChestClaimed ? (currentUser.lastShopChestClaimed.toDate ? currentUser.lastShopChestClaimed.toDate() : new Date(currentUser.lastShopChestClaimed)) : null;
+                const fiveDays = 5 * 24 * 60 * 60 * 1000;
+                const nextClaim = lastClaimed ? lastClaimed.getTime() + fiveDays : 0;
+                const canClaim = Date.now() >= nextClaim;
+
+                if (canClaim) {
+                  return (
+                    <button
+                      onClick={handleOpenShopChest}
+                      disabled={loading}
+                      className="mt-4 px-8 py-3 bg-white text-indigo-600 font-black rounded-2xl text-base shadow-xl hover:shadow-2xl transition-all hover:scale-105 active:scale-95 cursor-pointer"
+                    >
+                      ЗАБРАТЬ МОНЕТЫ! 🪙
+                    </button>
+                  );
+                } else {
+                  return <ChestCountdown nextClaim={nextClaim} />;
+                }
+              })()}
+            </div>
+            
+            <div className="absolute top-0 right-0 p-8 opacity-10 rotate-12 pointer-events-none">
+              <Sparkles className="w-40 h-40" />
+            </div>
+          </motion.div>
+
           {(currentUser.chestsCount || 0) > 0 && (
             <motion.div 
               initial={{ scale: 0.9, opacity: 0 }} 
@@ -2916,6 +3216,39 @@ export default function KidDashboard({
           </div>
         )}
       </AnimatePresence>
-    </div>
+
+      {/* Global Loading Overlay */}
+      <AnimatePresence>
+        {loading && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex flex-col items-center justify-center text-white"
+          >
+            <motion.div
+              animate={{ 
+                scale: [1, 1.1, 1],
+                rotate: [0, 10, -10, 0]
+              }}
+              transition={{ repeat: Infinity, duration: 2 }}
+              className="relative mb-6"
+            >
+               <div className="absolute inset-0 bg-amber-500 blur-3xl opacity-30 animate-pulse"></div>
+               <RefreshCw className="w-20 h-20 text-amber-400 animate-spin-slow relative z-10" />
+            </motion.div>
+            
+            <h2 className="text-2xl font-black mb-2 tracking-tight">Пожалуйста, подождите...</h2>
+            <p className="text-slate-300 font-bold animate-pulse">Идет загрузка данных и магия 🪄</p>
+            
+            <div className="mt-8 flex gap-2">
+               <div className="w-3 h-3 bg-indigo-500 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+               <div className="w-3 h-3 bg-purple-500 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
+               <div className="w-3 h-3 bg-pink-500 rounded-full animate-bounce"></div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
   );
 }

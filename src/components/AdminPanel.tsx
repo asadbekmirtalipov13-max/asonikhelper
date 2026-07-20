@@ -26,9 +26,10 @@ interface AdminPanelProps {
 }
 
 
-const PromoManager = ({ db, showAlert }: { db: any, showAlert: any }) => {
+const PromoManager = ({ db, showAlert, showConfirm }: { db: any, showAlert: any, showConfirm: any }) => {
   const [promos, setPromos] = React.useState<any[]>([]);
   const [marketItems, setMarketItems] = React.useState<any[]>([]);
+  const [editingPromo, setEditingPromo] = React.useState<any | null>(null);
 
   React.useEffect(() => {
     const fetchData = async () => {
@@ -68,7 +69,7 @@ const PromoManager = ({ db, showAlert }: { db: any, showAlert: any }) => {
     }
 
     try {
-      const docId = code; // Use the code as the document ID for uniqueness and easy lookup
+      const docId = code; 
       
       const docSnap = await getDoc(doc(db, "promocodes", docId));
       if (docSnap.exists()) {
@@ -91,7 +92,6 @@ const PromoManager = ({ db, showAlert }: { db: any, showAlert: any }) => {
       codeInput.value = "";
       pointsInput.value = "10";
       limitInput.value = "1";
-      
       productInput.value = "";
       
       showAlert("Успех", "Промокод успешно создан!");
@@ -104,11 +104,32 @@ const PromoManager = ({ db, showAlert }: { db: any, showAlert: any }) => {
     }
   };
 
+  const handleUpdate = async () => {
+    if (!editingPromo) return;
+    try {
+      await updateDoc(doc(db, "promocodes", editingPromo.id), {
+        points: Number(editingPromo.points) || 0,
+        chest: !!editingPromo.chest,
+        productId: editingPromo.productId || "",
+        activationsLeft: Number(editingPromo.activationsLeft) || 0
+      });
+      
+      setEditingPromo(null);
+      showAlert("Успешно", "Промокод обновлен!");
+      
+      const newSnap = await getDocs(collection(db, "promocodes"));
+      setPromos(newSnap.docs.map(d => d.data()));
+    } catch(e) {
+      console.error(e);
+      showAlert("Ошибка", "Не удалось обновить промокод");
+    }
+  };
+
   const handleDelete = async (id: string) => {
-    if (confirm("Точно удалить промокод " + id + "?")) {
+    showConfirm("Удаление промокода", "Точно удалить промокод " + id + "?", async () => {
       await deleteDoc(doc(db, "promocodes", id));
       setPromos(prev => prev.filter(p => p.id !== id));
-    }
+    });
   };
 
   return (
@@ -191,16 +212,89 @@ const PromoManager = ({ db, showAlert }: { db: any, showAlert: any }) => {
                 <p className="text-xs text-slate-500 font-medium mt-1">Осталось активаций: {promo.activationsLeft ?? (promo.active ? 'Безлимит' : 0)}</p>
                 <p className="text-[10px] text-slate-400 font-medium mt-0.5">Использований: {promo.usedBy?.length || 0}</p>
               </div>
-              <button
-                onClick={() => handleDelete(promo.id)}
-                className="p-2 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-              >
-                <Trash2 className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setEditingPromo(promo)}
+                  className="p-2 text-indigo-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
+                >
+                  <Pencil className="w-5 h-5" />
+                </button>
+                <button
+                  onClick={() => handleDelete(promo.id)}
+                  className="p-2 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                >
+                  <Trash2 className="w-5 h-5" />
+                </button>
+              </div>
             </div>
           ))
         )}
       </div>
+
+      {editingPromo && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-[60] flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-md shadow-2xl space-y-4">
+            <h3 className="font-bold text-lg text-slate-800">Редактировать промокод: {editingPromo.code}</h3>
+            
+            <div className="space-y-3">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase">Осталось активаций</label>
+                <input 
+                  type="number" 
+                  value={editingPromo.activationsLeft} 
+                  onChange={(e) => setEditingPromo({...editingPromo, activationsLeft: Number(e.target.value)})}
+                  className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase">Награда: Монеты</label>
+                <input 
+                  type="number" 
+                  value={editingPromo.points || 0} 
+                  onChange={(e) => setEditingPromo({...editingPromo, points: Number(e.target.value)})}
+                  className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    checked={!!editingPromo.chest} 
+                    onChange={(e) => setEditingPromo({...editingPromo, chest: e.target.checked})}
+                    className="w-4 h-4 accent-indigo-600"
+                  />
+                  <span className="text-xs font-bold text-slate-700 uppercase">Награда: Сундук 📦</span>
+                </label>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase">Товар (ID)</label>
+                <select 
+                  value={editingPromo.productId || ""} 
+                  onChange={(e) => setEditingPromo({...editingPromo, productId: e.target.value})}
+                  className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold"
+                >
+                  <option value="">Без товара</option>
+                  {marketItems.map(item => (
+                    <option key={item.id} value={item.id}>{item.title}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button onClick={() => setEditingPromo(null)} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-2xl text-xs transition-all cursor-pointer">
+                Отмена
+              </button>
+              <button onClick={handleUpdate} className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl text-xs transition-all shadow-md cursor-pointer">
+                Сохранить
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -1851,7 +1945,7 @@ export default function AdminPanel({ currentUser, users, settings, onUpdateSetti
       
       {/* PROMO CODES TAB */}
       {activeTab === "promo" && (
-        <PromoManager db={db} showAlert={showAlert} />
+        <PromoManager db={db} showAlert={showAlert} showConfirm={showConfirm} />
       )}
 
       {/* ACHIEVEMENTS TAB */}

@@ -382,6 +382,52 @@ export default function ParentDashboard({
     );
   };
 
+  const handleResendNotification = async (chore: Chore) => {
+    const kidId = chore.assignedTo[0];
+    const kid = kids.find(k => k.id === kidId);
+    if (!kid) return;
+
+    setLoading(true);
+    try {
+      // Send Telegram notification again
+      if (settings.telegramChatId) {
+        await sendTelegramNotification(
+          `🔔 <b>Напоминание о задании!</b>
+Кому: ${kid.name} ${kid.avatar}
+Задание: <b>${chore.title}</b>
+Описание: ${chore.description}
+Награда: 🪙 <b>${chore.points} баллов</b>
+
+<i>Пожалуйста, не забудь выполнить это задание! 🚀</i>`,
+          settings.telegramChatId
+        );
+      }
+
+      if (kid.telegramChatId) {
+        await sendTelegramNotification(
+          `🔔 <b>Эй, напоминаю про задание!</b>
+Квест: <b>${chore.title}</b>
+Награда: 🪙 <b>${chore.points} монет</b>
+
+<i>Жду отчет о выполнении! У тебя всё получится! 💪</i>`,
+          kid.telegramChatId
+        );
+      }
+      
+      // Update createdAt to bump it up or just a silent update
+      await updateDoc(doc(db, "chores", chore.id), {
+        lastNotifiedAt: new Date()
+      });
+
+      showAlert("Успешно", `Уведомление о задании "${chore.title}" отправлено повторно!`);
+    } catch (err) {
+      console.error("Failed to resend notification:", err);
+      showAlert("Ошибка", "Не удалось отправить уведомление.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Approve chore with full or custom points
   const handleApproveChore = async (chore: Chore, isFull: boolean) => {
     const pointsToAward = isFull ? chore.points : (customApprovalPoints[chore.id] ?? chore.points);
@@ -1014,13 +1060,22 @@ export default function ParentDashboard({
                         key={chore.id}
                         className={`p-4 border bg-white rounded-2xl flex flex-col justify-between gap-3 shadow-sm relative group ${chore.isUrgent ? "border-rose-400 shadow-rose-100" : "border-slate-200"}`}
                       >
-                        <button
-                          onClick={() => handleDeleteChore(chore.id, chore.title)}
-                          className="p-2 bg-rose-600 text-white hover:bg-rose-700 active:bg-rose-800 rounded-full absolute top-2.5 right-2.5 shadow-md hover:scale-105 transition-all cursor-pointer z-10 flex items-center justify-center"
-                          title="Удалить задание"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        <div className="absolute top-2.5 right-2.5 flex gap-2">
+                          <button
+                            onClick={() => handleResendNotification(chore)}
+                            className="p-2 bg-indigo-600 text-white hover:bg-indigo-700 active:bg-indigo-800 rounded-full shadow-md hover:scale-105 transition-all cursor-pointer z-10 flex items-center justify-center"
+                            title="Повторить уведомление"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteChore(chore.id, chore.title)}
+                            className="p-2 bg-rose-600 text-white hover:bg-rose-700 active:bg-rose-800 rounded-full shadow-md hover:scale-105 transition-all cursor-pointer z-10 flex items-center justify-center"
+                            title="Удалить задание"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
 
                         <div className="space-y-1">
                           <div className="flex items-center gap-1.5">
@@ -1788,155 +1843,165 @@ export default function ParentDashboard({
                 </button>
               </div>
               <div className="p-5 overflow-y-auto">
-          <div className="xl:col-span-1 p-5 bg-white border border-slate-100 rounded-3xl shadow-sm space-y-4">
-            <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
-              <Sparkles className="w-4.5 h-4.5 text-amber-500" />
-              Раздать новое задание
-            </h3>
-
-            {/* Quick Presets */}
-            <div className="space-y-1.5">
-              <label className="block text-[10px] font-bold text-slate-400 uppercase">Шаблоны быстрых дел</label>
-              <div className="flex flex-wrap gap-1.5">
-                {DEFAULT_CHORE_PRESETS.map(preset => (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    onClick={() => handleApplyPreset(preset)}
-                    className="py-1 px-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-xl text-[10px] font-semibold transition-all cursor-pointer"
-                  >
-                    {preset.title}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <form onSubmit={handleCreateChore} className="space-y-3 pt-2">
-              <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase">Название квеста</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Вытереть пыль в зале"
-                  value={choreTitle}
-                  onChange={(e) => setChoreTitle(e.target.value)}
-                  className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase">Инструкция (описание)</label>
-                <textarea
-                  rows={2}
-                  placeholder="Протереть все поверхности, используя тряпку из микрофибры..."
-                  value={choreDesc}
-                  onChange={(e) => setChoreDesc(e.target.value)}
-                  className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase flex justify-between">
-                    <span>Цена (баллы 🪙)</span>
-                    {choreUrgent && <span className="text-rose-500 font-black flex gap-1 items-center">🔥 Будет: {chorePoints * 2}</span>}
-                  </label>
-                  <input
-                    type="number"
-                    min={1}
-                    required
-                    value={chorePoints}
-                    onChange={(e) => setChorePoints(Number(e.target.value))}
-                    className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase">Лимит принятия</label>
-                  <div className="w-full mt-1 p-2.5 bg-slate-100 text-slate-500 rounded-xl text-xs font-bold select-none border border-slate-200">
-                    ⏱️ 30 минут
+                <div className="space-y-4">
+                  {/* Quick Presets */}
+                  <div className="space-y-1.5">
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase">Шаблоны быстрых дел</label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {DEFAULT_CHORE_PRESETS.map(preset => (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          onClick={() => handleApplyPreset(preset)}
+                          className="py-1 px-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-xl text-[10px] font-semibold transition-all cursor-pointer"
+                        >
+                          {preset.title}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              </div>
 
-              <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase">Время на выполнение (минут)</label>
-                <input
-                  type="number"
-                  min={1}
-                  value={choreUrgent ? 25 : choreExecutionLimit}
-                  disabled={choreUrgent}
-                  onChange={(e) => setChoreExecutionLimit(Number(e.target.value))}
-                  className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
-                />
-              </div>
+                  <form onSubmit={handleCreateChore} className="space-y-3 pt-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase">Название квеста</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Вытереть пыль в зале"
+                        value={choreTitle}
+                        onChange={(e) => setChoreTitle(e.target.value)}
+                        className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      />
+                    </div>
 
-              <div className="flex items-center gap-2 mt-2 bg-rose-50 p-3 rounded-xl border border-rose-100">
-                <input
-                  type="checkbox"
-                  id="urgent"
-                  checked={choreUrgent}
-                  onChange={(e) => setChoreUrgent(e.target.checked)}
-                  className="w-4 h-4 text-rose-500 rounded focus:ring-rose-500 cursor-pointer accent-rose-500"
-                />
-                <label htmlFor="urgent" className="text-xs font-black text-rose-600 uppercase cursor-pointer select-none">
-                  ⚡ Срочное задание (Награда X2, Время /2)
-                </label>
-              </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase">Инструкция (описание)</label>
+                      <textarea
+                        rows={2}
+                        placeholder="Протереть все поверхности, используя тряпку из микрофибры..."
+                        value={choreDesc}
+                        onChange={(e) => setChoreDesc(e.target.value)}
+                        className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      />
+                    </div>
 
-              <div>
-                <div className="flex justify-between items-center mb-1.5">
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase">Кому поручить задание?</label>
-                  {kids.length > 1 && (
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase flex justify-between">
+                          <span>Цена (баллы 🪙)</span>
+                          {choreUrgent && <span className="text-rose-500 font-black flex gap-1 items-center">🔥 Будет: {chorePoints * 2}</span>}
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          required
+                          value={chorePoints}
+                          onChange={(e) => setChorePoints(Number(e.target.value))}
+                          className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase">Лимит принятия</label>
+                        <div className="w-full mt-1 p-2.5 bg-slate-100 text-slate-500 rounded-xl text-xs font-bold select-none border border-slate-200">
+                          ⏱️ 30 минут
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase">Время на выполнение (минут)</label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={choreUrgent ? 25 : choreExecutionLimit}
+                        disabled={choreUrgent}
+                        onChange={(e) => setChoreExecutionLimit(Number(e.target.value))}
+                        className="w-full mt-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="flex items-center gap-2 bg-rose-50 p-2 rounded-xl border border-rose-100">
+                        <input
+                          type="checkbox"
+                          id="urgent"
+                          checked={choreUrgent}
+                          onChange={(e) => setChoreUrgent(e.target.checked)}
+                          className="w-4 h-4 text-rose-500 rounded focus:ring-rose-500 cursor-pointer accent-rose-500"
+                        />
+                        <label htmlFor="urgent" className="text-[10px] font-black text-rose-600 uppercase cursor-pointer select-none">
+                          ⚡ Срочное
+                        </label>
+                      </div>
+
+                      <div className="flex items-center gap-2 bg-indigo-50 p-2 rounded-xl border border-indigo-100">
+                        <input
+                          type="checkbox"
+                          id="weekly"
+                          checked={choreWeekly}
+                          onChange={(e) => setChoreWeekly(e.target.checked)}
+                          className="w-4 h-4 text-indigo-500 rounded focus:ring-indigo-500 cursor-pointer accent-indigo-500"
+                        />
+                        <label htmlFor="weekly" className="text-[10px] font-black text-indigo-600 uppercase cursor-pointer select-none">
+                          📅 Еженедельное
+                        </label>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between items-center mb-1.5">
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase">Кому поручить задание?</label>
+                        {kids.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (selectedKids.length === kids.length) {
+                                setSelectedKids([]);
+                              } else {
+                                setSelectedKids(kids.map(k => k.id));
+                              }
+                            }}
+                            className={`text-[9px] font-bold uppercase transition-colors cursor-pointer ${
+                              selectedKids.length === kids.length ? "text-rose-500 hover:text-rose-600" : "text-indigo-500 hover:text-indigo-600"
+                            }`}
+                          >
+                            {selectedKids.length === kids.length ? "Снять выбор" : "Выбрать всех"}
+                          </button>
+                        )}
+                      </div>
+                      {kids.length === 0 ? (
+                        <p className="text-[10px] text-rose-500 font-bold mt-1">Добавьте детей в панели настроек!</p>
+                      ) : (
+                        <div className="flex gap-2 mt-1.5 flex-wrap">
+                          {kids.map(k => (
+                            <button
+                              key={k.id}
+                              type="button"
+                              onClick={() => handleToggleKid(k.id)}
+                              className={`py-1.5 px-3 rounded-xl border text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                                selectedKids.includes(k.id)
+                                  ? `${palette.border} bg-amber-50/40 ${palette.text}`
+                                  : "border-slate-200 text-slate-500 hover:bg-slate-50"
+                              }`}
+                            >
+                              <span className="text-base">{k.avatar}</span>
+                              <span>{k.name}</span>
+                              {selectedKids.includes(k.id) && <Check className="w-3.5 h-3.5" />}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
                     <button
-                      type="button"
-                      onClick={() => {
-                        if (selectedKids.length === kids.length) {
-                          setSelectedKids([]);
-                        } else {
-                          setSelectedKids(kids.map(k => k.id));
-                        }
-                      }}
-                      className={`text-[9px] font-bold uppercase transition-colors cursor-pointer ${
-                        selectedKids.length === kids.length ? "text-rose-500 hover:text-rose-600" : "text-indigo-500 hover:text-indigo-600"
-                      }`}
+                      type="submit"
+                      disabled={loading || selectedKids.length === 0}
+                      className={`w-full py-3 mt-2 ${palette.bg} ${palette.hover} text-white text-xs font-bold rounded-2xl shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer`}
                     >
-                      {selectedKids.length === kids.length ? "Снять выбор" : "Выбрать всех"}
+                      Отправить задание детям 🚀
                     </button>
-                  )}
+                  </form>
                 </div>
-                {kids.length === 0 ? (
-                  <p className="text-[10px] text-rose-500 font-bold mt-1">Добавьте детей в панели настроек!</p>
-                ) : (
-                  <div className="flex gap-2 mt-1.5 flex-wrap">
-                    {kids.map(k => (
-                      <button
-                        key={k.id}
-                        type="button"
-                        onClick={() => handleToggleKid(k.id)}
-                        className={`py-1.5 px-3 rounded-xl border text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-                          selectedKids.includes(k.id)
-                            ? `${palette.border} bg-amber-50/40 ${palette.text}`
-                            : "border-slate-200 text-slate-500 hover:bg-slate-50"
-                        }`}
-                      >
-                        <span className="text-base">{k.avatar}</span>
-                        <span>{k.name}</span>
-                        {selectedKids.includes(k.id) && <Check className="w-3.5 h-3.5" />}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading || selectedKids.length === 0}
-                className={`w-full py-3 mt-2 ${palette.bg} ${palette.hover} text-white text-xs font-bold rounded-2xl shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer`}
-              >
-                Отправить задание детям 🚀
-              </button>
-            </form>
-          </div>
               </div>
             </motion.div>
           </div>
@@ -1973,19 +2038,32 @@ export default function ParentDashboard({
                   <p className="text-slate-500 text-xs">{reviewChore.description}</p>
                 </div>
 
-                {reviewChore.proofPhoto && (
+                {(reviewChore.proofPhoto || (reviewChore.weeklyPhotos && reviewChore.weeklyPhotos.length > 0)) && (
                   <div className="w-full rounded-2xl overflow-hidden bg-slate-50 border border-slate-100 shadow-inner space-y-2 max-h-[300px] overflow-y-auto p-2">
-                    {reviewChore.proofPhoto.split(',').map((url, idx) => (
-                      <div key={idx} className="relative">
-                          {reviewChore.isWeekly && <div className="absolute top-2 left-2 bg-indigo-500 text-white text-xs font-bold px-2 py-1 rounded-lg z-10 shadow-sm">День {idx + 1}</div>}
-                          <img 
-                            src={url} 
-                            alt={`Proof ${idx+1}`} 
-                            className="w-full rounded-xl object-contain"
-                            referrerPolicy="no-referrer"
-                          />
-                      </div>
-                    ))}
+                    {reviewChore.isWeekly && reviewChore.weeklyPhotos ? (
+                      reviewChore.weeklyPhotos.map((url, idx) => (
+                        <div key={idx} className="relative mb-2 last:mb-0">
+                            <div className="absolute top-2 left-2 bg-indigo-500 text-white text-[9px] font-black px-2 py-1 rounded-lg z-10 shadow-sm uppercase">День {idx + 1}</div>
+                            <img 
+                              src={url} 
+                              alt={`Proof Day ${idx+1}`} 
+                              className="w-full rounded-xl object-contain border border-slate-200 shadow-sm"
+                              referrerPolicy="no-referrer"
+                            />
+                        </div>
+                      ))
+                    ) : (
+                      reviewChore.proofPhoto && reviewChore.proofPhoto.split(',').map((url, idx) => (
+                        <div key={idx} className="relative">
+                            <img 
+                              src={url} 
+                              alt={`Proof ${idx+1}`} 
+                              className="w-full rounded-xl object-contain"
+                              referrerPolicy="no-referrer"
+                            />
+                        </div>
+                      ))
+                    )}
                   </div>
                 )}
 
