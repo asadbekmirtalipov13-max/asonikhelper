@@ -116,21 +116,31 @@ const IMGBB_API_KEY = (import.meta as any).env.VITE_IMGBB_API_KEY || '88c6cd2b32
 export async function uploadImageToImgbb(base64Image: string): Promise<string | null> {
   try {
     const optimizedBase64 = await resizeBase64Image(base64Image, 1024, 1024);
-    const cleanBase64 = optimizedBase64.replace(/^data:image\/\w+;base64,/, '');
-    const formData = new FormData();
-    formData.append('image', cleanBase64);
-    const response = await fetch('https://api.imgbb.com/1/upload?key=' + IMGBB_API_KEY, {
+    
+    // Use the server-side proxy to upload. This keeps the API key secure on the server.
+    const response = await fetch('/api/upload', {
       method: 'POST',
-      body: formData
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ image: optimizedBase64 })
     });
-    const data = await response.json();
-    if (data.success && data.data && data.data.url) {
-      return data.data.url;
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      console.error('IMGBB proxy upload failed:', errorData.error || response.statusText);
+      return null;
     }
-    console.error('IMGBB upload error:', data.error);
+
+    const data = await response.json();
+    if (data.success && data.url) {
+      return data.url;
+    }
+    
+    console.error('IMGBB upload error details:', data.error || 'Unknown error');
     return null;
   } catch (error) {
-    console.error('Failed to upload image:', error);
+    console.error('Failed to upload image via proxy:', error);
     return null;
   }
 }

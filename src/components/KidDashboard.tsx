@@ -1,14 +1,14 @@
 import React, { useState, useEffect, useRef } from "react";
 import { AppNotification, Chore, FamilyUser, MarketItem, Purchase, SiteSettings, Transaction } from "../types";
 import { db } from "../firebase";
-import { doc, updateDoc, setDoc, getDoc, collection, addDoc, increment, getDocs, query, where } from "firebase/firestore";
+import { doc, updateDoc, setDoc, getDoc, collection, addDoc, increment, getDocs, query, where, deleteDoc } from "firebase/firestore";
 import { checkAchievement, ACHIEVEMENTS } from "../achievements";
 import { fireConfetti } from "../utils/confetti";
 import { 
   Sparkles, Award, Clock, Camera, Check, ShoppingBag, 
   Trash2, Flame, Gift, Compass, ShieldAlert, CheckCircle, 
   X, AlertCircle, RefreshCw, RotateCcw, HelpCircle, Upload, Image as ImageIcon, User, Search, Send, Gamepad2, Trophy, Ticket, Dice1, Play, ArrowUpCircle
-, Gamepad2, RotateCcw } from "lucide-react";
+} from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { TAILWIND_COLOR_PALETTES, DEFAULT_CATEGORIES } from "../presets";
 import { uploadImageToImgbb, compressImageFile } from "../utils/upload";
@@ -24,7 +24,7 @@ interface KidDashboardProps {
   notifications: AppNotification[];
   settings: SiteSettings;
   primaryColor: keyof typeof TAILWIND_COLOR_PALETTES;
-  showAlert: (title: string, message: string) => void;
+  showAlert: (title: string, message: string, image?: string) => void;
   showConfirm: (title: string, message: string, onConfirm: () => void) => void;
   activeTab?: "quests" | "store" | "daily" | "profile";
   setActiveTab?: (tab: "quests" | "store" | "daily" | "profile") => void;
@@ -284,19 +284,8 @@ export default function KidDashboard({
 
   const myNotifications = notifications.filter(n => n.kidId === currentUser.id);
   const unreadCount = myNotifications.filter(n => !n.read).length;
-  const sortedFilteredItems = [
-    // Special recurring chest
-    {
-      id: "shop-chest-5days",
-      title: "Сундук Удачи (Раз в 5 дней)",
-      description: "Бесплатный сундук! Открывай его каждые 5 дней и забирай от 1 до 50 монет!",
-      image: settings.chestImageUrl || "https://cdn-icons-png.flaticon.com/512/4342/4342728.png",
-      points: 0,
-      isSpecial: true,
-      category: "Сундуки"
-    },
-    ...marketItems
-      .filter(item => {
+  const sortedFilteredItems = marketItems
+    .filter(item => {
       if (item.hidden) return false;
       const matchesSearch = item.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
                             item.description.toLowerCase().includes(searchTerm.toLowerCase());
@@ -317,8 +306,7 @@ export default function KidDashboard({
       const tA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
       const tB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
       return tB - tA;
-    })
-  ];
+    });
 
   // 1. Daily Check-in Claim logic
   // Use GMT+5 for date tracking
@@ -695,14 +683,27 @@ export default function KidDashboard({
       const choreRef = doc(db, "chores", submittingChore.id);
       
       if (submittingChore.isWeekly) {
-        const todayStr = `${new Date().getFullYear()}-${new Date().getMonth()+1}-${new Date().getDate()}`;
+        // 8-hour cooldown check
+        const lastSub = submittingChore.lastWeeklySubmissionTime ? (submittingChore.lastWeeklySubmissionTime.toDate ? submittingChore.lastWeeklySubmissionTime.toDate() : new Date(submittingChore.lastWeeklySubmissionTime)) : null;
+        if (lastSub) {
+          const eightHours = 8 * 60 * 60 * 1000;
+          if (Date.now() - lastSub.getTime() < eightHours) {
+            const diffMs = eightHours - (Date.now() - lastSub.getTime());
+            const hoursLeft = Math.floor(diffMs / (60 * 60 * 1000));
+            const minsLeft = Math.floor((diffMs % (60 * 60 * 1000)) / (60 * 1000));
+            showAlert("Подождите! ⏳", `Следующее фото можно будет отправить через ${hoursLeft}ч ${minsLeft}м. Старайтесь выполнять задания качественно!`);
+            setUploadProgress(false);
+            return;
+          }
+        }
+
         const newWeeklyDaysLogged = (submittingChore.weeklyDaysLogged || 0) + 1;
         const newWeeklyPhotos = [...(submittingChore.weeklyPhotos || []), uploadedUrl];
         
         const updates: any = {
           weeklyDaysLogged: newWeeklyDaysLogged,
           weeklyPhotos: newWeeklyPhotos,
-          lastWeeklySubmission: todayStr
+          lastWeeklySubmissionTime: new Date()
         };
 
         if (newWeeklyDaysLogged >= 7) {
@@ -1306,11 +1307,20 @@ export default function KidDashboard({
                 kidName: currentUser.name,
                 productId: item.id,
                 productTitle: item.title,
+                productImage: item.image,
                 price: 0,
                 status: "pending",
                 createdAt: new Date()
               });
               msg += ` Вы получили товар "${item.title}"! (Ожидает подтверждения)`;
+              
+              // We show the image if it's a product promo
+              fireConfetti();
+              showAlert("Успех!", msg, item.image);
+              setPromoCode("");
+              setPromoLoading(false);
+              await checkAchievement(currentUser.id, "hacker", 1, settings);
+              return; 
             }
           }
           
@@ -1750,7 +1760,7 @@ export default function KidDashboard({
                           <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
                              <div className="bg-indigo-500 h-full transition-all" style={{ width: `${((chore.weeklyDaysLogged || 0) / 7) * 100}%` }}></div>
                           </div>
-                          {chore.lastWeeklySubmission === `${new Date().getFullYear()}-${new Date().getMonth()+1}-${new Date().getDate()}` && (
+                          {chore.lastWeeklySubmissionTime && (new Date(chore.lastWeeklySubmissionTime.toDate ? chore.lastWeeklySubmissionTime.toDate() : chore.lastWeeklySubmissionTime).toDateString() === new Date().toDateString()) && (
                              <div className="text-[10px] text-emerald-600 font-bold mt-1">✓ Фото за сегодня отправлено</div>
                           )}
                         </div>
@@ -1766,7 +1776,8 @@ export default function KidDashboard({
                     <div className="space-y-2">
                       {(() => {
                          const todayStr = `${new Date().getFullYear()}-${new Date().getMonth()+1}-${new Date().getDate()}`;
-                         const alreadySubmittedToday = chore.isWeekly && chore.lastWeeklySubmission === todayStr;
+                         const lastSubDate = chore.lastWeeklySubmissionTime ? (chore.lastWeeklySubmissionTime.toDate ? chore.lastWeeklySubmissionTime.toDate() : new Date(chore.lastWeeklySubmissionTime)) : null;
+                         const alreadySubmittedToday = chore.isWeekly && lastSubDate && lastSubDate.toDateString() === new Date().toDateString();
                          return (
                             <button
                               onClick={() => !alreadySubmittedToday && setSubmittingChore(chore)}

@@ -24,7 +24,7 @@ interface ParentDashboardProps {
   notifications: AppNotification[];
   settings: SiteSettings;
   primaryColor: keyof typeof TAILWIND_COLOR_PALETTES;
-  showAlert: (title: string, message: string) => void;
+  showAlert: (title: string, message: string, image?: string) => void;
   showConfirm: (title: string, message: string, onConfirm: () => void) => void;
 }
 
@@ -1780,7 +1780,7 @@ export default function ParentDashboard({
                             <span>{tx.kidName}</span>
                           </td>
                           <td className="p-3.5">
-                            <div className="font-bold text-slate-700">{tx.title || tx.description || 'Транзакция'}</div>
+                            <div className="font-bold text-slate-700">{tx.title || 'Транзакция'}</div>
                             <div className="text-[9px] text-slate-400 mt-0.5">
                               {tx.type === "income" ? "🏆 За выполненный квест" : "🎁 Заказан приз в магазине"}
                             </div>

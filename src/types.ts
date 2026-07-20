@@ -11,11 +11,12 @@ export interface FamilyUser {
   createdBy?: string;
   dailyStreak: number;
   lastCheckIn?: string; // YYYY-MM-DD
-  lastShopChestClaimed?: string; // ISO string
+  lastShopChestClaimed?: any; // ISO string or Timestamp
   telegramChatId?: string; // Kid-specific or user-specific telegram chat/channel ID
   restoresUsedThisMonth?: number;
   lastRestoreMonth?: string;
   chestsCount?: number;
+  lastSeenUpdate?: number;
   achievements?: Record<string, {
     progress: number;
     completed: boolean;
@@ -53,6 +54,10 @@ export interface Chore {
   finalPoints?: number; // Actual points awarded by parent
   executionLimitMinutes?: number; // Completion time limit set by parent (defaults to 60)
   isWeekly?: boolean;
+  weeklyDaysLogged?: number;
+  weeklyPhotos?: string[];
+  lastWeeklySubmissionTime?: any;
+  weeklyProgress?: any[];
   weeklyDays?: {
     day: number;
     photoUrl: string;
@@ -95,7 +100,6 @@ export interface Purchase {
   issuedAt?: any;
   giftedBy?: string;
   customInput?: string;
-  customInput?: string;
 }
 
 export interface Transaction {
@@ -118,6 +122,11 @@ export interface SiteSettings {
   chestImageUrl?: string; // Customizable image URL or fallback emoji
   categories?: string[]; // Custom store categories
   faqs?: { id: string; question: string; answer: string }[];
+  latestUpdate?: {
+    version: number;
+    title: string;
+    text: string;
+  };
 }
 
 export interface AppNotification {
@@ -127,8 +136,11 @@ export interface AppNotification {
   text: string;
   createdAt: any;
   read: boolean;
-  type?: "message" | "chest" | "quest" | "system";
+  type?: "message" | "chest" | "quest" | "system" | "achievement_reward";
   chestPoints?: number;
+  rewardPoints?: number;
+  rewardChest?: boolean;
+  achievementId?: string;
 }
 
 export type PromoCode = {

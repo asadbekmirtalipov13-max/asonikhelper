@@ -1,4 +1,4 @@
-import { doc, getDoc, updateDoc, collection, addDoc } from "firebase/firestore";
+import { doc, getDoc, updateDoc, collection, addDoc, setDoc } from "firebase/firestore";
 import { db } from "./firebase";
 import { sendTelegramNotification } from "./utils/telegram";
 

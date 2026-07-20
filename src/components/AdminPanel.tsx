@@ -21,7 +21,7 @@ interface AdminPanelProps {
   settings: SiteSettings;
   onUpdateSettings: (newSettings: Partial<SiteSettings>) => void;
   primaryColor: keyof typeof TAILWIND_COLOR_PALETTES;
-  showAlert: (title: string, message: string) => void;
+  showAlert: (title: string, message: string, image?: string) => void;
   showConfirm: (title: string, message: string, onConfirm: () => void) => void;
 }
 

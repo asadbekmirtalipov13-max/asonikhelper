@@ -1,17 +1,18 @@
 import React, { useState, useEffect } from "react";
 import { 
-  collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, orderBy 
+  collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, orderBy, increment, deleteDoc
 } from "firebase/firestore";
 import { db, auth, handleFirestoreError, OperationType } from "./firebase";
-import { FamilyUser, Chore, MarketItem, Purchase, SiteSettings, Transaction } from "./types";
+import { FamilyUser, Chore, MarketItem, Purchase, SiteSettings, Transaction, AppNotification } from "./types";
 import { TAILWIND_COLOR_PALETTES } from "./presets";
 import { sendTelegramNotification } from "./utils/telegram";
+import { fireConfetti } from "./utils/confetti";
 import LoginScreen from "./components/LoginScreen";
 import ParentDashboard from "./components/ParentDashboard";
 import KidDashboard from "./components/KidDashboard";
 import AdminPanel from "./components/AdminPanel";
 import { 
-  LogOut, Shield, Award, ShoppingBag, Settings, Star, Flame, Sparkles, Bell, X, Package
+  LogOut, Shield, Award, ShoppingBag, Settings, Star, Flame, Sparkles, Bell, X, Package, Gift, RefreshCw
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -335,15 +336,17 @@ export default function App() {
     type: "alert" | "confirm";
     title: string;
     message: string;
+    image?: string;
     onConfirm?: () => void;
   } | null>(null);
 
-  const showAlert = (title: string, message: string) => {
+  const showAlert = (title: string, message: string, image?: string) => {
     setCustomModal({
       isOpen: true,
       type: "alert",
       title,
-      message
+      message,
+      image
     });
   };
 
@@ -390,6 +393,7 @@ export default function App() {
             
             // Subtract 20 points
             const kidId = chore.assignedTo[0];
+            const kids = users.filter(u => u.role === "kid");
             const kid = kids.find(k => k.id === kidId);
             if (kid) {
                const newBalance = kid.points - 20;
@@ -823,6 +827,16 @@ export default function App() {
                   <p className="text-xs text-slate-500 font-bold leading-relaxed whitespace-pre-wrap">
                     {customModal.message}
                   </p>
+                  {customModal.image && (
+                    <div className="mt-3 rounded-2xl overflow-hidden border border-slate-100 shadow-sm">
+                      <img 
+                        src={customModal.image} 
+                        alt="Promo Image" 
+                        className="w-full h-auto object-cover max-h-[160px]"
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
 
