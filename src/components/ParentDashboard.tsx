@@ -887,11 +887,8 @@ export default function ParentDashboard({
                               <button 
                                 onClick={async () => {
                                   try {
-                                    const updates = {
-                                      [`achievements.${ach.id}.completed`]: !isCompleted,
-                                      [`achievements.${ach.id}.progress`]: !isCompleted ? ach.target : 0
-                                    };
-                                    await updateDoc(doc(db, "users", kid.id), updates);
+                                    const updates = { achievements: { [ach.id]: { completed: !isCompleted, progress: !isCompleted ? ach.target : 0 } } };
+                                    await setDoc(doc(db, "users", kid.id), updates, { merge: true });
                                   } catch (e) { console.error(e); }
                                 }}
                                 className={`mt-1 text-[9px] font-bold px-2 py-0.5 rounded transition-colors cursor-pointer ${isCompleted ? 'bg-amber-200 text-amber-800 hover:bg-amber-300' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}

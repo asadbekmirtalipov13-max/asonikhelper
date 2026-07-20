@@ -32,16 +32,16 @@ export async function checkAchievement(kidId: string, achievementId: string, amo
     const isCompleted = newProgress >= def.target;
     
     const updates: any = {
-      [`achievements.${achievementId}.progress`]: newProgress,
-      [`achievements.${achievementId}.completed`]: isCompleted
+      progress: newProgress,
+      completed: isCompleted
     };
     
     if (isCompleted) {
-      updates[`achievements.${achievementId}.completedAt`] = new Date();
-      updates[`achievements.${achievementId}.rewardClaimed`] = false;
+      updates.completedAt = new Date();
+      updates.rewardClaimed = false;
     }
     
-    await updateDoc(userRef, updates);
+    await setDoc(userRef, { achievements: { [achievementId]: updates } }, { merge: true });
     
     if (isCompleted) {
       // Notify

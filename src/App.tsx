@@ -188,11 +188,7 @@ export default function App() {
           if (!prev) return null;
           return {
             ...prev,
-            points: updatedUser.points,
-            dailyStreak: updatedUser.dailyStreak,
-            lastCheckIn: updatedUser.lastCheckIn,
-            avatar: updatedUser.avatar,
-            name: updatedUser.name
+            ...updatedUser
           };
         });
       }
