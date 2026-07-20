@@ -96,6 +96,9 @@ export default function KidDashboard({
   const [coinChoice, setCoinChoice] = useState<"heads" | "tails" | null>(null);
   const [coinResult, setCoinResult] = useState<{player: string, bot: string, outcome: string, amount: number} | null>(null);
   const [coinLoading, setCoinLoading] = useState(false);
+  const [diceChoice, setDiceChoice] = useState<"low" | "high" | null>(null);
+  const [diceResult, setDiceResult] = useState<{player: string, bot: number, outcome: string} | null>(null);
+  const [diceLoading, setDiceLoading] = useState(false);
   const activeTab = externalActiveTab !== undefined ? externalActiveTab : internalActiveTab;
   const setActiveTab = externalSetActiveTab !== undefined ? externalSetActiveTab : setInternalActiveTab;
 
@@ -179,10 +182,10 @@ export default function KidDashboard({
 
   useEffect(() => {
     const interval = setInterval(() => {
-      const gmt5Now = new Date(new Date().getTime() + 5 * 60 * 60 * 1000);
-      const nextMidnight = new Date(gmt5Now);
-      nextMidnight.setUTCHours(24, 0, 0, 0); // Next midnight in GMT+5
-      const diff = nextMidnight.getTime() - gmt5Now.getTime();
+      const now = new Date();
+      const nextMidnight = new Date(now);
+      nextMidnight.setHours(24, 0, 0, 0); 
+      const diff = nextMidnight.getTime() - now.getTime();
       
       const hours = Math.floor((diff / (1000 * 60 * 60)) % 24);
       const minutes = Math.floor((diff / 1000 / 60) % 60);
@@ -1484,6 +1487,68 @@ export default function KidDashboard({
         console.error(err);
       } finally {
         setCoinLoading(false);
+      }
+    }, 1000);
+  };
+
+  const handlePlayDice = async (choice: "low" | "high") => {
+    if (currentUser.points < gameBet) {
+      showAlert("Ой!", "Недостаточно монет для игры!");
+      return;
+    }
+    
+    const todayGameTxs = transactions.filter(t => {
+      if (t.kidId !== currentUser.id || t.type !== "expense" || !(t.description?.includes("Кубик") || t.title?.includes("Кубик"))) return false;
+      if (!t.createdAt) return false;
+      const d = t.createdAt.toDate ? t.createdAt.toDate() : new Date(t.createdAt);
+      return d.toDateString() === new Date().toDateString();
+    });
+    const spentToday = todayGameTxs.reduce((sum, t) => sum + t.amount, 0);
+    
+    if (spentToday + gameBet > 30) {
+      showAlert("Лимит исчерпан", `Максимум 30 монет в день на эту игру! Осталось ${Math.max(0, 30 - spentToday)} монет.`);
+      return;
+    }
+
+    setDiceLoading(true);
+    setDiceChoice(choice);
+    
+    setTimeout(async () => {
+      const diceRoll = Math.floor(Math.random() * 6) + 1;
+      const outcome: "win" | "lose" = (choice === "low" && diceRoll <= 3) || (choice === "high" && diceRoll >= 4) ? "win" : "lose";
+      
+      setDiceResult({ player: choice, bot: diceRoll, outcome });
+      
+      try {
+        if (outcome === "win") {
+          await updateDoc(doc(db, "users", currentUser.id), {
+            points: increment(Math.floor(gameBet * 1.5))
+          });
+          await addDoc(collection(db, "transactions"), {
+            kidId: currentUser.id,
+            type: "income",
+            amount: Math.floor(gameBet * 1.5),
+            title: "Победа в игре (Кубик)", description: "Победа в игре (Кубик) - 1.5x!",
+            createdAt: new Date(),
+            balanceAfter: currentUser.points + (Math.floor(gameBet * 1.5))
+          });
+        } else {
+          await updateDoc(doc(db, "users", currentUser.id), {
+            points: increment(-gameBet)
+          });
+          await addDoc(collection(db, "transactions"), {
+            kidId: currentUser.id,
+            type: "expense",
+            amount: gameBet,
+            title: "Проигрыш в игре (Кубик)", description: "Проигрыш в игре (Кубик)",
+            createdAt: new Date(),
+            balanceAfter: currentUser.points - gameBet
+          });
+        }
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setDiceLoading(false);
       }
     }, 1000);
   };
@@ -3025,29 +3090,44 @@ export default function KidDashboard({
               <Gamepad2 className="w-6 h-6 text-indigo-500" />
               Игры
             </h2>
+            <div className="bg-rose-50 border border-rose-100 px-3 py-1.5 rounded-2xl flex items-center gap-2">
+              <span className="text-[10px] font-black text-rose-500 uppercase tracking-wider">Сброс лимита через:</span>
+              <span className="text-sm font-black text-rose-600 font-mono">{timeLeftToNextDay}</span>
+            </div>
           </div>
           
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {/* Rock Paper Scissors Card */}
             <div 
               onClick={() => { setActiveGame("rps"); setGameBet(10); setRpsResult(null); }}
-              className="bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-3xl p-5 cursor-pointer transition-all flex items-center gap-4 group"
+              className="bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-3xl p-5 cursor-pointer transition-all flex flex-col items-center gap-3 group"
             >
               <div className="text-5xl group-hover:scale-110 transition-transform select-none">✊✌️🖐️</div>
-              <div>
+              <div className="text-center">
                 <h3 className="text-lg font-black text-slate-700">Суефа</h3>
-                <p className="text-[10px] font-bold text-slate-400 mt-1">Играть с ботом (Удвоение)</p>
+                <p className="text-[10px] font-bold text-slate-400 mt-1">Играть с ботом (1.5x)</p>
               </div>
             </div>
             {/* Coin Flip Card */}
             <div 
               onClick={() => { setActiveGame("coin"); setGameBet(10); setCoinResult(null); }}
-              className="bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-3xl p-5 cursor-pointer transition-all flex items-center gap-4 group"
+              className="bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-3xl p-5 cursor-pointer transition-all flex flex-col items-center gap-3 group"
             >
               <div className="text-5xl group-hover:scale-110 transition-transform select-none">🪙🦅</div>
-              <div>
+              <div className="text-center">
                 <h3 className="text-lg font-black text-slate-700">Орел или Решка</h3>
-                <p className="text-[10px] font-bold text-slate-400 mt-1">Угадай сторону (Удвоение)</p>
+                <p className="text-[10px] font-bold text-slate-400 mt-1">Угадай сторону (1.5x)</p>
+              </div>
+            </div>
+            {/* Lucky Dice Card */}
+            <div 
+              onClick={() => { setActiveGame("dice" as any); setGameBet(10); setDiceResult(null); }}
+              className="bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-3xl p-5 cursor-pointer transition-all flex flex-col items-center gap-3 group"
+            >
+              <div className="text-5xl group-hover:scale-110 transition-transform select-none">🎲🍀</div>
+              <div className="text-center">
+                <h3 className="text-lg font-black text-slate-700">Счастливый Кубик</h3>
+                <p className="text-[10px] font-bold text-slate-400 mt-1">Больше или меньше (1.5x)</p>
               </div>
             </div>
           </div>
@@ -3056,37 +3136,37 @@ export default function KidDashboard({
             {activeGame && (
               <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
                 <motion.div 
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  onClick={() => { setActiveGame(null); setRpsResult(null); setCoinResult(null); }}
-                  className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+                   initial={{ opacity: 0 }}
+                   animate={{ opacity: 1 }}
+                   exit={{ opacity: 0 }}
+                   onClick={() => { setActiveGame(null); setRpsResult(null); setCoinResult(null); setDiceResult(null); }}
+                   className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
                 />
                 
                 <motion.div 
-                  initial={{ opacity: 0, scale: 0.95, y: 20 }}
-                  animate={{ opacity: 1, scale: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.95, y: 20 }}
-                  className="relative w-full max-w-sm bg-white rounded-3xl shadow-xl overflow-hidden"
+                   initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                   animate={{ opacity: 1, scale: 1, y: 0 }}
+                   exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                   className="relative w-full max-w-sm bg-white rounded-3xl shadow-xl overflow-hidden"
                 >
                   <div className="p-6">
                     <div className="flex justify-between items-center mb-6">
                       <h3 className="text-xl font-black text-slate-800">
-                        {activeGame === "rps" ? "Суефа" : "Орел или Решка"}
+                        {activeGame === "rps" ? "Суефа" : activeGame === "coin" ? "Орел или Решка" : "Счастливый Кубик"}
                       </h3>
-                      <button onClick={() => { setActiveGame(null); setRpsResult(null); setCoinResult(null); }} className="p-2 bg-slate-100 hover:bg-slate-200 rounded-full cursor-pointer transition-colors"><X className="w-5 h-5 text-slate-500" /></button>
+                      <button onClick={() => { setActiveGame(null); setRpsResult(null); setCoinResult(null); setDiceResult(null); }} className="p-2 bg-slate-100 hover:bg-slate-200 rounded-full cursor-pointer transition-colors"><X className="w-5 h-5 text-slate-500" /></button>
                     </div>
                     
-                    {!rpsResult && !coinResult && !rpsLoading && !coinLoading && (
+                    {!rpsResult && !coinResult && !diceResult && !rpsLoading && !coinLoading && !diceLoading && (
                       <div className="mb-6">
                         <label className="block text-xs font-bold text-slate-500 mb-2 uppercase">Ваша ставка (макс 30 монет)</label>
                         <input 
-                          type="number" 
-                          min={1} 
-                          max={30}
-                          value={gameBet} 
-                          onChange={(e) => setGameBet(Math.min(30, Math.max(1, Number(e.target.value) || 1)))}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-lg font-black text-center focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                           type="number" 
+                           min={1} 
+                           max={30}
+                           value={gameBet} 
+                           onChange={(e) => setGameBet(Math.min(30, Math.max(1, Number(e.target.value) || 1)))}
+                           className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-lg font-black text-center focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         />
                       </div>
                     )}
@@ -3117,7 +3197,7 @@ export default function KidDashboard({
                           </div>
                         )}
                       </div>
-                    ) : (
+                    ) : activeGame === "coin" ? (
                       <div>
                         {coinResult ? (
                           <div className="text-center bg-slate-50 p-6 rounded-3xl border border-slate-200">
@@ -3142,6 +3222,43 @@ export default function KidDashboard({
                             <button onClick={() => handlePlayCoin("tails")} className="py-6 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-2xl transition-all cursor-pointer shadow-sm active:scale-95 flex flex-col items-center gap-2">
                               <span className="text-4xl text-amber-500">🪙</span>
                               <span className="font-bold text-slate-700">Решка</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div>
+                         {diceResult ? (
+                          <div className="text-center bg-slate-50 p-6 rounded-3xl border border-slate-200">
+                            <div className="flex justify-center items-center gap-4 mb-4">
+                              <div className="w-16 h-16 bg-white border-2 border-slate-200 rounded-2xl flex items-center justify-center text-3xl font-black text-indigo-600 shadow-sm">
+                                {diceResult.bot}
+                              </div>
+                            </div>
+                            <div className="text-xs font-bold text-slate-400 mb-1 uppercase">Вы выбрали: {diceResult.player === "low" ? "1-3 (Меньше)" : "4-6 (Больше)"}</div>
+                            <div className={`text-xl font-black mb-4 ${diceResult.outcome === "win" ? "text-emerald-500" : "text-rose-500"}`}>
+                              {diceResult.outcome === "win" ? `+${Math.floor(gameBet * 1.5)} 🪙 ВЫИГРЫШ!` : `-${gameBet} 🪙 ПРОИГРЫШ`}
+                            </div>
+                            <button onClick={() => setDiceResult(null)} className="w-full py-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-xl cursor-pointer transition-colors">
+                              Сыграть еще раз
+                            </button>
+                          </div>
+                        ) : diceLoading ? (
+                          <div className="py-12 flex justify-center flex-col items-center gap-4">
+                            <RefreshCw className="w-12 h-12 animate-spin text-indigo-500" />
+                            <span className="text-xs font-bold text-slate-400 animate-pulse">Бросаем кубик...</span>
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-2 gap-3">
+                            <button onClick={() => handlePlayDice("low")} className="py-6 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-2xl transition-all cursor-pointer shadow-sm active:scale-95 flex flex-col items-center gap-2">
+                              <span className="text-4xl">📉</span>
+                              <span className="font-bold text-slate-700">1 - 3</span>
+                              <span className="text-[10px] text-slate-400 font-bold uppercase">Меньше</span>
+                            </button>
+                            <button onClick={() => handlePlayDice("high")} className="py-6 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-2xl transition-all cursor-pointer shadow-sm active:scale-95 flex flex-col items-center gap-2">
+                              <span className="text-4xl">📈</span>
+                              <span className="font-bold text-slate-700">4 - 6</span>
+                              <span className="text-[10px] text-slate-400 font-bold uppercase">Больше</span>
                             </button>
                           </div>
                         )}
