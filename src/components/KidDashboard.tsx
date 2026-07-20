@@ -515,10 +515,7 @@ export default function KidDashboard({
           if (chore) {
             const newAssignedTo = chore.assignedTo.filter(id => id !== currentUser.id);
             if (newAssignedTo.length === 0) {
-              await updateDoc(choreRef, {
-                status: "declined",
-                assignedTo: newAssignedTo
-              });
+              await deleteDoc(choreRef);
             } else {
               await updateDoc(choreRef, {
                 assignedTo: newAssignedTo
@@ -676,7 +673,40 @@ export default function KidDashboard({
     }
   };
 
-    const handleGiftItem = async () => {
+      const handleOpenChestFromInventory = async () => {
+    if (loading || !currentUser.chestsCount || currentUser.chestsCount <= 0) return;
+    setLoading(true);
+    try {
+      const reward = Math.floor(Math.random() * (50 - 5 + 1)) + 5; // 5 to 50 coins
+      const updates = {
+        chestsCount: increment(-1),
+        points: increment(reward)
+      };
+      await updateDoc(doc(db, "users", currentUser.id), updates);
+      
+      const txId = "tx-chest-" + Math.random().toString(36).substr(2, 9);
+      await setDoc(doc(db, "transactions", txId), {
+        id: txId,
+        kidId: currentUser.id,
+        kidName: currentUser.name,
+        type: "income",
+        amount: reward,
+        title: `Награда из сундука`,
+        createdAt: new Date(),
+        balanceAfter: currentUser.points + reward
+      });
+      
+      setOpeningChest({ reward }); // Render chest modal
+      fireConfetti();
+    } catch(err) {
+      console.error(err);
+      showAlert("Ошибка", "Не удалось открыть сундук.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGiftItem = async () => {
     if (!giftPurchaseItem || !giftTargetId || loading) return;
     const item = giftPurchaseItem;
     const customInput = purchaseCustomInput;
@@ -812,7 +842,11 @@ export default function KidDashboard({
       }
       
       if (ach.reward.chest) {
-        setOpeningChest({ day: "ach", isChest: true, points: ach.reward.points || 0, item: null });
+        const chestUpdates = { chestsCount: increment(1) };
+        await updateDoc(doc(db, "users", currentUser.id), chestUpdates);
+        showAlert("Ура!", `Награда за достижение получена!${ach.reward.points ? ` (+${ach.reward.points} монет)` : ""}${ach.reward.chest ? ` (+1 Сундук! Ищите его в магазине)` : ""}`);
+      } else {
+        showAlert("Ура!", `Награда за достижение получена! (+${ach.reward.points} монет)`);
       }
       
       fireConfetti();
@@ -907,8 +941,8 @@ export default function KidDashboard({
           );
         }
         
-        setOpeningChest(null);
-        showAlert("Сундук Открыт! 📦", `Вы открыли сундук и нашли там ${reward} монет! 🎉`);
+        setOpeningChest({ reward });
+        fireConfetti();
       } else {
         // REGULAR PURCHASE LOGIC
         const purchaseId = "purchase-" + Math.random().toString(36).substr(2, 9);
@@ -969,7 +1003,7 @@ export default function KidDashboard({
   const [promoLoading, setPromoLoading] = useState(false);
 
   
-  const handleActivatePromo = async () => {
+    const handleActivatePromo = async () => {
     if (!promoCode.trim() || promoLoading) return;
     setPromoLoading(true);
     const code = promoCode.trim().toUpperCase();
@@ -1006,40 +1040,77 @@ export default function KidDashboard({
         const promoDoc = snap.docs[0];
         const promo = promoDoc.data();
         
-        // Check if user already used this promo
-        const txQ = query(collection(db, "transactions"), where("kidId", "==", currentUser.id), where("title", "==", `Промокод ${code}`));
-        const txSnap = await getDocs(txQ);
-        if (!txSnap.empty) {
+        const usedBy = promo.usedBy || [];
+        if (usedBy.includes(currentUser.id)) {
            showAlert("Ошибка", "Вы уже активировали этот промокод!");
            setPromoLoading(false);
            return;
         }
         
         if (promo.activationsLeft > 0) {
-          const newBalance = currentUser.points + promo.points;
-          await updateDoc(doc(db, "users", currentUser.id), { points: newBalance });
+          let newBalance = currentUser.points;
+          let msg = "Промокод активирован!";
           
-          const txId = "tx-promo-" + Math.random().toString(36).substr(2, 9);
-          await setDoc(doc(db, "transactions", txId), {
-            id: txId,
-            kidId: currentUser.id,
-            kidName: currentUser.name,
-            type: "income",
-            amount: promo.points,
-            title: `Промокод ${code}`,
-            createdAt: new Date(),
-            balanceAfter: newBalance
-          });
+          if (promo.points > 0) {
+            newBalance += promo.points;
+            msg += ` Вы получили ${promo.points} монет!`;
+            
+            const txId = "tx-promo-" + Math.random().toString(36).substr(2, 9);
+            await setDoc(doc(db, "transactions", txId), {
+              id: txId,
+              kidId: currentUser.id,
+              kidName: currentUser.name,
+              type: "income",
+              amount: promo.points,
+              title: `Промокод ${code}`,
+              createdAt: new Date(),
+              balanceAfter: newBalance
+            });
+          }
+          
+          if (promo.chest) {
+             const updates = {
+               chestsCount: increment(1)
+             };
+             await updateDoc(doc(db, "users", currentUser.id), updates);
+             msg += " Вы получили сундук!";
+          }
+          
+          if (promo.productId) {
+            const marketRef = doc(db, "marketplace", promo.productId);
+            const marketSnap = await getDoc(marketRef);
+            if (marketSnap.exists()) {
+              const item = marketSnap.data();
+              const purchaseId = "buy-" + Math.random().toString(36).substr(2, 9);
+              await setDoc(doc(db, "purchases", purchaseId), {
+                id: purchaseId,
+                kidId: currentUser.id,
+                kidName: currentUser.name,
+                productId: item.id,
+                productTitle: item.title,
+                price: 0,
+                status: "pending",
+                createdAt: new Date()
+              });
+              msg += ` Вы получили товар "${item.title}"! (Ожидает подтверждения)`;
+            }
+          }
+          
+          if (newBalance !== currentUser.points) {
+            await updateDoc(doc(db, "users", currentUser.id), { points: newBalance });
+          }
           
           const newActivationsLeft = promo.activationsLeft - 1;
           await updateDoc(doc(db, "promocodes", promo.id), {
             activationsLeft: newActivationsLeft,
-            active: newActivationsLeft > 0
+            active: newActivationsLeft > 0,
+            usedBy: [...usedBy, currentUser.id]
           });
           
           fireConfetti();
-          showAlert("Успех!", `Промокод активирован! Вы получили ${promo.points} монет!`);
+          showAlert("Успех!", msg);
           setPromoCode("");
+          await checkAchievement(currentUser.id, "hacker", 1, settings);
         } else {
           showAlert("Ошибка", "У этого промокода закончились активации.");
         }
@@ -1051,8 +1122,7 @@ export default function KidDashboard({
       setPromoLoading(false);
     }
   };
-
-  // Game Handlers
+// Game Handlers
   const handlePlayRps = async (choice: "rock" | "paper" | "scissors") => {
     if (currentUser.points < gameBet) {
       showAlert("Ой!", "Недостаточно монет для игры!");
@@ -1431,6 +1501,18 @@ export default function KidDashboard({
 
                       <h4 className="font-bold text-slate-800 text-sm leading-tight pt-1">{chore.title}</h4>
                       <p className="text-slate-500 text-xs leading-relaxed">{chore.description}</p>
+                      
+                      {chore.isWeekly && (
+                        <div className="pt-2">
+                          <div className="text-[10px] font-bold text-indigo-600 mb-1">Прогресс квеста: {chore.weeklyDaysLogged || 0}/7 дней</div>
+                          <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                             <div className="bg-indigo-500 h-full transition-all" style={{ width: `${((chore.weeklyDaysLogged || 0) / 7) * 100}%` }}></div>
+                          </div>
+                          {chore.lastWeeklySubmission === `${new Date().getFullYear()}-${new Date().getMonth()+1}-${new Date().getDate()}` && (
+                             <div className="text-[10px] text-emerald-600 font-bold mt-1">✓ Фото за сегодня отправлено</div>
+                          )}
+                        </div>
+                      )}
 
                       {chore.parentFeedback && (
                         <div className="p-3 bg-rose-100/50 border border-rose-200 rounded-2xl text-[11px] text-rose-700 leading-normal">
@@ -1440,12 +1522,20 @@ export default function KidDashboard({
                   </div>
 
                     <div className="space-y-2">
-                      <button
-                        onClick={() => setSubmittingChore(chore)}
-                        className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-all shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
-                      >
-                        <Camera className="w-4 h-4" /> Сдать отчет (фотоотчет) 📸
-                      </button>
+                      {(() => {
+                         const todayStr = `${new Date().getFullYear()}-${new Date().getMonth()+1}-${new Date().getDate()}`;
+                         const alreadySubmittedToday = chore.isWeekly && chore.lastWeeklySubmission === todayStr;
+                         return (
+                            <button
+                              onClick={() => !alreadySubmittedToday && setSubmittingChore(chore)}
+                              disabled={alreadySubmittedToday}
+                              className={`w-full py-2.5 ${alreadySubmittedToday ? 'bg-emerald-100 text-emerald-600 cursor-not-allowed opacity-80' : 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer'} text-xs font-bold rounded-xl transition-all shadow-sm flex items-center justify-center gap-1.5`}
+                            >
+                              {alreadySubmittedToday ? <Check className="w-4 h-4" /> : <Camera className="w-4 h-4" />}
+                              {alreadySubmittedToday ? 'Отчет за сегодня сдан! Приходи завтра' : 'Сдать отчет (фотоотчет) 📸'}
+                            </button>
+                         );
+                      })()}
                       <button
                         onClick={() => handleCancelActiveChore(chore.id, chore.title)}
                         className="w-full py-1.5 bg-rose-50 hover:bg-rose-100 border border-rose-100 hover:border-rose-200 text-rose-600 text-[10px] font-black rounded-xl transition-all flex items-center justify-center gap-1 cursor-pointer uppercase tracking-wider"
@@ -1513,6 +1603,29 @@ export default function KidDashboard({
       {/* STORE REWARDS VIEW */}
       {activeTab === "store" && (
         <div className="space-y-6">
+          {(currentUser.chestsCount || 0) > 0 && (
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }} 
+              animate={{ scale: 1, opacity: 1 }}
+              className="bg-purple-100 border-2 border-purple-300 rounded-3xl p-6 flex flex-col items-center justify-center text-center shadow-lg relative overflow-hidden"
+            >
+              <div className="absolute top-0 right-0 p-4 opacity-20 transform translate-x-1/2 -translate-y-1/2">
+                <Gift className="w-32 h-32 text-purple-500" />
+              </div>
+              <Gift className="w-16 h-16 text-purple-600 mb-3 animate-bounce" />
+              <h3 className="text-xl font-black text-purple-800 mb-2">У вас есть неоткрытые сундуки! ({currentUser.chestsCount})</h3>
+              <p className="text-sm text-purple-600 mb-4 max-w-sm">
+                Откройте сундук, чтобы получить случайное количество монет (от 5 до 50 🪙)!
+              </p>
+              <button
+                onClick={handleOpenChestFromInventory}
+                disabled={loading}
+                className="px-8 py-3 bg-purple-600 hover:bg-purple-700 active:bg-purple-800 text-white font-black rounded-xl text-lg shadow-md hover:shadow-lg transition-all hover:scale-105 cursor-pointer z-10"
+              >
+                ОТКРЫТЬ СУНДУК 📦
+              </button>
+            </motion.div>
+          )}
           {/* Marketplace search input & Category Horizontal Tab List */}
           <div className="space-y-4">
             <div className="relative w-full max-w-md bg-white p-1 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-2">

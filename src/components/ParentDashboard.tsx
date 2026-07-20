@@ -50,6 +50,7 @@ export default function ParentDashboard({
   const [chorePoints, setChorePoints] = useState(10);
   const [choreExecutionLimit, setChoreExecutionLimit] = useState(60);
   const [choreUrgent, setChoreUrgent] = useState(false);
+  const [choreWeekly, setChoreWeekly] = useState(false);
   const [selectedKids, setSelectedKids] = useState<string[]>([]);
   
   // Custom points input state for partial approval
@@ -274,6 +275,7 @@ export default function ParentDashboard({
     } else {
       setChoreExecutionLimit(60);
       setChoreUrgent(false);
+          setChoreWeekly(false);
     }
   };
 
@@ -300,11 +302,14 @@ export default function ParentDashboard({
 
         const newChore: Chore = {
           id: choreId,
-          title: choreTitle.trim(),
+          title: choreTitle.trim() + (choreWeekly ? " (Еженедельное)" : ""),
           description: choreDesc.trim(),
           points: finalPoints,
           executionLimitMinutes: finalLimit,
           isUrgent: isUrgent,
+          isWeekly: choreWeekly,
+          weeklyProgress: [],
+          weeklyDaysLogged: 0,
           assignedTo: [kidId],
           status: "pending",
           createdAt: now,
@@ -1022,11 +1027,9 @@ export default function ParentDashboard({
                             <span className="text-xl">{kid?.avatar || "👦"}</span>
                             <span className="text-[10px] font-extrabold text-slate-400 uppercase">{kid?.name}</span>
                             <span className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded-full uppercase ml-auto ${
-                              chore.status === "pending" ? "bg-amber-100 text-amber-700" :
-                              chore.status === "rejected" ? "bg-red-100 text-red-600" : "bg-emerald-100 text-emerald-700"
+                              chore.status === "pending" ? "bg-amber-100 text-amber-700" : chore.status === "rejected" ? "bg-red-100 text-red-600" : chore.status === "declined" ? "bg-slate-100 text-slate-500" : "bg-emerald-100 text-emerald-700"
                             }`}>
-                              {chore.status === "pending" ? "Ожидает" :
-                               chore.status === "rejected" ? "Доработка" : "Выполняется"}
+                              {chore.status === "pending" ? "Ожидает" : chore.status === "rejected" ? "Доработка" : chore.status === "declined" ? "Отказ" : "Выполняется"}
                             </span>
                           </div>
 
@@ -1971,13 +1974,18 @@ export default function ParentDashboard({
                 </div>
 
                 {reviewChore.proofPhoto && (
-                  <div className="w-full rounded-2xl overflow-hidden bg-slate-50 border border-slate-100 shadow-inner">
-                    <img 
-                      src={reviewChore.proofPhoto} 
-                      alt="Proof submission" 
-                      className="w-full object-contain max-h-[300px]"
-                      referrerPolicy="no-referrer"
-                    />
+                  <div className="w-full rounded-2xl overflow-hidden bg-slate-50 border border-slate-100 shadow-inner space-y-2 max-h-[300px] overflow-y-auto p-2">
+                    {reviewChore.proofPhoto.split(',').map((url, idx) => (
+                      <div key={idx} className="relative">
+                          {reviewChore.isWeekly && <div className="absolute top-2 left-2 bg-indigo-500 text-white text-xs font-bold px-2 py-1 rounded-lg z-10 shadow-sm">День {idx + 1}</div>}
+                          <img 
+                            src={url} 
+                            alt={`Proof ${idx+1}`} 
+                            className="w-full rounded-xl object-contain"
+                            referrerPolicy="no-referrer"
+                          />
+                      </div>
+                    ))}
                   </div>
                 )}
 

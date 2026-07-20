@@ -14,6 +14,7 @@ export interface FamilyUser {
   telegramChatId?: string; // Kid-specific or user-specific telegram chat/channel ID
   restoresUsedThisMonth?: number;
   lastRestoreMonth?: string;
+  chestsCount?: number;
   achievements?: Record<string, {
     progress: number;
     completed: boolean;
