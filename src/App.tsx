@@ -455,9 +455,26 @@ export default function App() {
               </span>
               <div className="text-left max-w-[120px]">
                 <div className="font-bold text-xs text-slate-800 truncate leading-tight">{currentUser.name}</div>
-                <div className="text-[9px] text-slate-400 capitalize font-bold">
+                <div className="text-[9px] text-slate-400 capitalize font-bold flex items-center">
                   {currentUser.role === "admin" ? "Администратор" : 
-                   currentUser.role === "parent" ? "Родитель" : `Ребенок • 🪙 ${currentUser.points}`}
+                   currentUser.role === "parent" ? "Родитель" : (
+                     <div className="flex items-center">
+                       <span className="mr-1">Ребенок • 🪙</span>
+                       <div className="relative inline-flex overflow-hidden">
+                         <AnimatePresence mode="popLayout">
+                           <motion.div
+                             key={currentUser.points}
+                             initial={{ y: -10, opacity: 0, filter: "blur(2px)" }}
+                             animate={{ y: 0, opacity: 1, filter: "blur(0px)" }}
+                             exit={{ y: 10, opacity: 0, filter: "blur(2px)", position: "absolute" }}
+                             transition={{ type: "spring", bounce: 0.4, duration: 0.6 }}
+                           >
+                             {currentUser.points}
+                           </motion.div>
+                         </AnimatePresence>
+                       </div>
+                     </div>
+                   )}
                 </div>
               </div>
             </div>

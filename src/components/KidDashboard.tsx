@@ -944,7 +944,19 @@ export default function KidDashboard({
           <div className="flex justify-between items-start z-10 relative">
             <div>
               <div className="text-[9px] font-black text-amber-100 uppercase tracking-wider">Мой баланс</div>
-              <div className="text-xl md:text-3xl font-black mt-0.5 tracking-tight">🪙 {currentUser.points}</div>
+              <div className="text-xl md:text-3xl font-black mt-0.5 tracking-tight relative flex items-center overflow-hidden">
+                <AnimatePresence mode="popLayout">
+                  <motion.div
+                    key={currentUser.points}
+                    initial={{ y: 20, opacity: 0, filter: "blur(4px)" }}
+                    animate={{ y: 0, opacity: 1, filter: "blur(0px)" }}
+                    exit={{ y: -20, opacity: 0, filter: "blur(4px)" }}
+                    transition={{ type: "spring", bounce: 0.5, duration: 0.5 }}
+                  >
+                    🪙 {currentUser.points}
+                  </motion.div>
+                </AnimatePresence>
+              </div>
             </div>
             <button 
               onClick={() => setIsHistoryModalOpen(true)}
@@ -2000,11 +2012,15 @@ export default function KidDashboard({
                   Отмена
                 </button>
                 <button
-                  onClick={handleBuyItem}
+                  onClick={() => {
+                    if (!loading) {
+                      handleBuyItem();
+                    }
+                  }}
                   disabled={loading}
-                  className={`flex-1 py-3 ${palette.bg} ${palette.hover} text-white font-bold rounded-2xl text-xs transition-all shadow-sm cursor-pointer disabled:opacity-50`}
+                  className={`flex-1 py-3 ${palette.bg} ${palette.hover} text-white font-bold rounded-2xl text-xs transition-all shadow-sm ${loading ? 'opacity-50 grayscale cursor-not-allowed' : 'cursor-pointer'}`}
                 >
-                  Купить! 🚀
+                  {loading ? 'Обработка...' : 'Купить! 🚀'}
                 </button>
               </div>
             </motion.div>
