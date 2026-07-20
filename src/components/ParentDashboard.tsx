@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import { AppNotification, Chore, FamilyUser, MarketItem, Purchase, SiteSettings, Transaction } from "../types";
 import { db } from "../firebase";
 import { collection, addDoc, updateDoc, doc, setDoc, deleteDoc, getDocs, query, where } from "firebase/firestore";
-import { checkAchievement } from "../achievements";
+import { checkAchievement, ACHIEVEMENTS } from "../achievements";
 import { 
   Sparkles, Plus, Check, Clock, Eye, AlertCircle, Trash2, 
   Tag, ShoppingBag, Award, Camera, CornerDownRight, ThumbsUp, ThumbsDown, RefreshCw,
