@@ -506,8 +506,8 @@ export default function ParentDashboard({
       const maxSortOrder = marketItems.reduce((max, item) => Math.max(max, item.sortOrder || 0), 0);
       
       const discountNumber = Number(itemDiscount);
-      let discountPercentage = undefined;
-      let discountUntil = undefined;
+      let discountPercentage = null;
+      let discountUntil = null;
       if (!isNaN(discountNumber) && discountNumber > 0 && discountNumber < 100) {
         discountPercentage = discountNumber;
         const tomorrow = new Date();

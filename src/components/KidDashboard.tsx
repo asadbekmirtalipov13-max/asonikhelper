@@ -697,8 +697,6 @@ export default function KidDashboard({
       // Always create a purchase record, but for target kid
       const purchaseId = "purchase-" + Math.random().toString(36).substr(2, 9);
       
-      await updateDoc(kidRef, { points: currentUser.points - finalPrice });
-      
       await setDoc(doc(db, "purchases", purchaseId), {
         id: purchaseId,
         kidId: targetKid.id,
@@ -709,7 +707,7 @@ export default function KidDashboard({
         points: finalPrice, // It's free for them, but we record cost
         status: "pending",
         createdAt: new Date(),
-        customInput: customInput || undefined,
+        customInput: customInput || "",
         giftedBy: currentUser.name
       });
 
@@ -724,6 +722,7 @@ export default function KidDashboard({
         createdAt: new Date(),
         balanceAfter: currentUser.points - finalPrice
       });
+        await updateDoc(kidRef, { points: currentUser.points - finalPrice });
 
       if (item.stock > 0) {
         await updateDoc(itemRef, { stock: item.stock - 1 });
@@ -842,8 +841,6 @@ export default function KidDashboard({
         // REGULAR PURCHASE LOGIC
         const purchaseId = "purchase-" + Math.random().toString(36).substr(2, 9);
         
-        await updateDoc(kidRef, { points: currentUser.points - finalPrice });
-        
         await setDoc(doc(db, "purchases", purchaseId), {
           id: purchaseId,
           kidId: currentUser.id,
@@ -854,7 +851,7 @@ export default function KidDashboard({
           points: finalPrice,
           status: "pending",
           createdAt: new Date(),
-          customInput: customInput || undefined
+          customInput: customInput || ""
         });
 
         const txId = "tx-" + Math.random().toString(36).substr(2, 9);
@@ -868,6 +865,8 @@ export default function KidDashboard({
           createdAt: new Date(),
           balanceAfter: currentUser.points - finalPrice
         });
+
+        await updateDoc(doc(db, "users", currentUser.id), { points: currentUser.points - finalPrice });
 
         if (item.stock > 0) {
           await updateDoc(itemRef, { stock: item.stock - 1 });
