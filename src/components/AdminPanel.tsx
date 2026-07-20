@@ -83,7 +83,7 @@ export default function AdminPanel({ currentUser, users, settings, onUpdateSetti
   const [notifTarget, setNotifTarget] = useState<string>("all");
   const [notifType, setNotifType] = useState<"message" | "chest">("message");
   const [notifText, setNotifText] = useState("");
-  const [notifChestCount, setNotifChestCount] = useState(1);
+  const [notifChestPoints, setNotifChestPoints] = useState(10);
   
   const handleSendNotification = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1548,8 +1548,8 @@ export default function AdminPanel({ currentUser, users, settings, onUpdateSetti
                     type="number"
                     min="1"
                     max="10"
-                    value={notifChestCount}
-                    onChange={e => setNotifChestCount(Number(e.target.value))}
+                    value={notifChestPoints}
+                    onChange={e => setNotifChestPoints(Number(e.target.value))}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                   <p className="text-[10px] text-slate-400 mt-1">Ребенок получит указанное количество сундуков (каждый содержит от 1 до 50 случайных монет).</p>
