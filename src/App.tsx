@@ -238,30 +238,42 @@ export default function App() {
   };
 
   
+  const [chestIsOpening, setChestIsOpening] = useState(false);
+
   const handleOpenChest = async (notification: any) => {
-    if (!notification.chestPoints) return;
+    if (!notification.chestPoints || chestIsOpening) return;
+    setChestIsOpening(true);
     setOpeningChest(notification);
     
     // Fake animation delay
     await new Promise(resolve => setTimeout(resolve, 2000));
     
-    const kidRef = doc(db, "users", currentUser.id);
-    const newBalance = currentUser.points + notification.chestPoints;
-    await updateDoc(kidRef, { points: newBalance });
-    const txId = "tx-chest-" + Math.random().toString(36).substr(2, 9);
-    await setDoc(doc(db, "transactions", txId), {
-      id: txId,
-      kidId: currentUser.id,
-      kidName: currentUser.name,
-      type: "income",
-      amount: notification.chestPoints,
-      description: "Открыт сундук!",
-      createdAt: new Date()
-    });
-    await updateDoc(doc(db, "notifications", notification.id), { chestPoints: 0, title: notification.title + " (Открыто)" });
-    
-    setOpeningChest(null);
-    showAlert("ОТКРЫТ СУНДУК! 🎉", `Вы получили ${notification.chestPoints} монет из сундука!`);
+    try {
+      // User requested 1 to 50 coins randomly per chest
+      const reward = Math.floor(Math.random() * 50) + 1;
+      
+      const kidRef = doc(db, "users", currentUser.id);
+      const newBalance = currentUser.points + reward;
+      await updateDoc(kidRef, { points: newBalance });
+      
+      const txId = "tx-chest-" + Math.random().toString(36).substr(2, 9);
+      await setDoc(doc(db, "transactions", txId), {
+        id: txId,
+        kidId: currentUser.id,
+        kidName: currentUser.name,
+        type: "income",
+        amount: reward,
+        description: "Открыт сундук!",
+        createdAt: new Date(),
+        balanceAfter: newBalance
+      });
+      await updateDoc(doc(db, "notifications", notification.id), { chestPoints: 0, title: notification.title + " (Открыто)", read: true });
+      
+      setOpeningChest(null);
+      showAlert("ОТКРЫТ СУНДУК! 🎉", `Вы открыли сундук и нашли там ${reward} монет!`);
+    } finally {
+      setChestIsOpening(false);
+    }
   };
   
 
@@ -624,9 +636,10 @@ export default function App() {
                         {n.type === "chest" && n.chestPoints > 0 && (
                           <button
                             onClick={() => handleOpenChest(n)}
-                            className="mt-2 w-full py-2 bg-gradient-to-r from-amber-400 to-orange-500 text-white font-black text-[10px] rounded-xl shadow-sm hover:shadow-md hover:scale-[1.02] transition-all flex items-center justify-center gap-1 cursor-pointer"
+                            disabled={chestIsOpening}
+                            className={`mt-2 w-full py-2 ${chestIsOpening ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-gradient-to-r from-amber-400 to-orange-500 text-white hover:shadow-md hover:scale-[1.02] cursor-pointer'} font-black text-[10px] rounded-xl shadow-sm transition-all flex items-center justify-center gap-1`}
                           >
-                            <Sparkles className="w-3 h-3" /> Открыть Сундук!
+                            <Sparkles className="w-3 h-3" /> {chestIsOpening ? 'Открываем...' : 'Открыть Сундук!'}
                           </button>
                         )}
                         
@@ -649,6 +662,27 @@ export default function App() {
         <div>HELPER • С любовью для братьев ❤️</div>
         <div className="text-[10px] text-slate-300 font-black tracking-wider uppercase">powered by ASONIK</div>
       </footer>
+
+      {openingChest && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[100] flex flex-col items-center justify-center p-4">
+          <motion.div
+            initial={{ scale: 0.8, rotate: -5 }}
+            animate={{ scale: [0.8, 1.1, 1], rotate: [-5, 5, -5, 0] }}
+            transition={{ duration: 1.5, repeat: Infinity, repeatType: "reverse" }}
+            className="text-8xl mb-6 select-none drop-shadow-2xl"
+          >
+            🎁
+          </motion.div>
+          <motion.h2 
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="text-2xl md:text-3xl font-black text-white text-center"
+          >
+            Открываем сундук...
+          </motion.h2>
+          <p className="text-white/60 font-medium mt-2">Пожалуйста, подождите!</p>
+        </div>
+      )}
 
       {/* Custom Alert/Confirm Modal Overlay */}
       <AnimatePresence>

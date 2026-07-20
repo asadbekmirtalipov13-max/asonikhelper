@@ -1,7 +1,9 @@
 const fs = require('fs');
 let content = fs.readFileSync('src/App.tsx', 'utf8');
 
-const replacement = `  const [chestIsOpening, setChestIsOpening] = useState(false);
+const regex = /const handleOpenChest = async \([\s\S]*?showAlert\("ОТКРЫТ СУНДУК![^\n]+\n\s*\};\n/;
+
+const replacement = `const [chestIsOpening, setChestIsOpening] = useState(false);
 
   const handleOpenChest = async (notification: any) => {
     if (!notification.chestPoints || chestIsOpening) return;
@@ -12,8 +14,7 @@ const replacement = `  const [chestIsOpening, setChestIsOpening] = useState(fals
     await new Promise(resolve => setTimeout(resolve, 2000));
     
     try {
-      // Random reward from 1 to 50 if chestPoints is 1, otherwise maybe we use 1 to 50 anyway
-      // Actually, user says "от одного до 50 монет", let's use Math.floor(Math.random() * 50) + 1
+      // User requested 1 to 50 coins randomly per chest
       const reward = Math.floor(Math.random() * 50) + 1;
       
       const kidRef = doc(db, "users", currentUser.id);
@@ -28,18 +29,18 @@ const replacement = `  const [chestIsOpening, setChestIsOpening] = useState(fals
         type: "income",
         amount: reward,
         description: "Открыт сундук!",
-        createdAt: new Date()
+        createdAt: new Date(),
+        balanceAfter: newBalance
       });
-      await updateDoc(doc(db, "notifications", notification.id), { chestPoints: 0, title: notification.title + " (Открыто)" });
+      await updateDoc(doc(db, "notifications", notification.id), { chestPoints: 0, title: notification.title + " (Открыто)", read: true });
       
       setOpeningChest(null);
-      showAlert("ОТКРЫТ СУНДУК! 🎉", \`Вы получили \${reward} монет из сундука!\`);
+      showAlert("ОТКРЫТ СУНДУК! 🎉", \`Вы открыли сундук и нашли там \${reward} монет!\`);
     } finally {
       setChestIsOpening(false);
     }
-  };`;
+  };\n`;
 
-const regex = /const handleOpenChest = async \([^\}]+showAlert\("ОТКРЫТ СУНДУК! 🎉", [^\}]+\n\s*\};\n/s;
 content = content.replace(regex, replacement);
 
 fs.writeFileSync('src/App.tsx', content);
