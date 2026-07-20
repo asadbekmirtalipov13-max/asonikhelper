@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { AppNotification, Chore, FamilyUser, MarketItem, Purchase, SiteSettings, Transaction } from "../types";
+import { AppNotification, Chore, FamilyUser, MarketItem, Purchase, SiteSettings, Transaction , getDocs, query, where } from "../types";
 import { db } from "../firebase";
 import { doc, updateDoc, setDoc, getDoc, collection, addDoc, increment } from "firebase/firestore";
 import { checkAchievement } from "../achievements";
@@ -961,6 +961,47 @@ export default function KidDashboard({
       setLoading(false);
       setProcessingOrder(null);
       setOpeningChest(null);
+    }
+  };
+
+
+  const [promoCode, setPromoCode] = useState("");
+  const [promoLoading, setPromoLoading] = useState(false);
+
+  const handleActivatePromo = async () => {
+    if (!promoCode.trim() || promoLoading) return;
+    setPromoLoading(true);
+    try {
+      if (promoCode.trim().toUpperCase() === "HACKER") {
+        await checkAchievement(currentUser.id, "hacker", 1, settings);
+        
+        // Give basic reward
+        const newBalance = currentUser.points + 5;
+        await updateDoc(doc(db, "users", currentUser.id), { points: newBalance });
+        
+        const txId = "tx-promo-" + Math.random().toString(36).substr(2, 9);
+        await setDoc(doc(db, "transactions", txId), {
+          id: txId,
+          kidId: currentUser.id,
+          kidName: currentUser.name,
+          type: "income",
+          amount: 5,
+          title: "Промокод HACKER",
+          createdAt: new Date(),
+          balanceAfter: newBalance
+        });
+        
+        fireConfetti();
+        showAlert("Успех!", "Промокод активирован! Вы получили 5 монет и открыли достижение Хакер!");
+        setPromoCode("");
+      } else {
+        showAlert("Ошибка", "Неверный или неактивный промокод.");
+      }
+    } catch(err) {
+      console.error(err);
+      showAlert("Ошибка", "Произошла ошибка при активации");
+    } finally {
+      setPromoLoading(false);
     }
   };
 
@@ -2564,7 +2605,7 @@ export default function KidDashboard({
                     
                     {!rpsResult && !coinResult && !rpsLoading && !coinLoading && (
                       <div className="mb-6">
-                        <label className="block text-xs font-bold text-slate-500 mb-2 uppercase">Ваша ставка (монет)</label>
+                        <label className="block text-xs font-bold text-slate-500 mb-2 uppercase">Ваша ставка (макс 30 монет)</label>
                         <input 
                           type="number" 
                           min={1} 
