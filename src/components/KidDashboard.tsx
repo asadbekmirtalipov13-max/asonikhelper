@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { AppNotification, Chore, FamilyUser, MarketItem, Purchase, SiteSettings, Transaction } from "../types";
 import { db } from "../firebase";
-import { doc, updateDoc, setDoc, getDoc } from "firebase/firestore";
+import { doc, updateDoc, setDoc, getDoc, collection, addDoc } from "firebase/firestore";
 import { 
   Sparkles, Award, Clock, Camera, Check, ShoppingBag, 
   Trash2, Flame, Gift, Compass, ShieldAlert, CheckCircle, 

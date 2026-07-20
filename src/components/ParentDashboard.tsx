@@ -1566,7 +1566,11 @@ export default function ParentDashboard({
                       <div className="truncate">
                         <div className="text-[10px] font-extrabold text-indigo-500 uppercase flex items-center gap-1.5">
                           <span>{kid?.avatar || "👦"}</span>
-                          <span>Купил: {pur.kidName}</span>
+                          {pur.giftedBy ? (
+                            <span>Подарок для {pur.kidName} (от {pur.giftedBy})</span>
+                          ) : (
+                            <span>Купил: {pur.kidName}</span>
+                          )}
                         </div>
                         <h5 className="font-bold text-slate-800 text-sm mt-0.5 truncate pr-8">{pur.productTitle}</h5>
                         <div className="text-[10px] text-slate-400 font-medium">

@@ -79,6 +79,8 @@ export interface Purchase {
   status: "pending" | "issued"; // 'pending' in progress, 'issued' handed over
   createdAt: any;
   issuedAt?: any;
+  giftedBy?: string;
+  customInput?: string;
   customInput?: string;
 }
 
