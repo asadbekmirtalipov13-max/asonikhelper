@@ -12,8 +12,14 @@ export interface FamilyUser {
   dailyStreak: number;
   lastCheckIn?: string; // YYYY-MM-DD
   telegramChatId?: string; // Kid-specific or user-specific telegram chat/channel ID
-  restoresUsedThisMonth?: number; // Count of streak restores used in the current month
-  lastRestoreMonth?: string; // Tracker for month boundary e.g. "2026-07"
+  restoresUsedThisMonth?: number;
+  lastRestoreMonth?: string;
+  achievements?: Record<string, {
+    progress: number;
+    completed: boolean;
+    completedAt?: any;
+    rewardClaimed?: boolean;
+  }>;
 }
 
 export interface ChorePreset {

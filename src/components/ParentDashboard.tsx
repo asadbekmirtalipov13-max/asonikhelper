@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { AppNotification, Chore, FamilyUser, MarketItem, Purchase, SiteSettings, Transaction } from "../types";
 import { db } from "../firebase";
-import { collection, addDoc, updateDoc, doc, setDoc, deleteDoc } from "firebase/firestore";
+import { collection, addDoc, updateDoc, doc, setDoc, deleteDoc, getDocs, query, where } from "firebase/firestore";
+import { checkAchievement } from "../achievements";
 import { 
   Sparkles, Plus, Check, Clock, Eye, AlertCircle, Trash2, 
   Tag, ShoppingBag, Award, Camera, CornerDownRight, ThumbsUp, ThumbsDown, RefreshCw,
-  Pencil, X, Pin, EyeOff, ArrowUp, ArrowDown, BarChart2
+  Pencil, X, Pin, EyeOff, ArrowUp, ArrowDown, BarChart2, Users
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { DEFAULT_CHORE_PRESETS, TAILWIND_COLOR_PALETTES, DEFAULT_CATEGORIES } from "../presets";
@@ -328,7 +329,40 @@ export default function ParentDashboard({
           );
         }
 
-        // Send direct Telegram notification to Kid
+        
+      // Check achievements
+      await checkAchievement(kidId, "first_steps", 1, settings);
+      await checkAchievement(kidId, "stalker", 1, settings);
+      
+      if (chore.acceptedAt && chore.completedAt) {
+        const acceptedDate = chore.acceptedAt.toDate ? chore.acceptedAt.toDate() : new Date(chore.acceptedAt);
+        const completedDate = chore.completedAt.toDate ? chore.completedAt.toDate() : new Date(chore.completedAt);
+        const diffMs = completedDate.getTime() - acceptedDate.getTime();
+        if (diffMs <= 5 * 60 * 1000) {
+          await checkAchievement(kidId, "easy_peasy", 1, settings);
+        }
+      }
+      
+      try {
+        const todayStart = new Date();
+        todayStart.setHours(0,0,0,0);
+        const choresRef = collection(db, "chores");
+        const q = query(choresRef, where("assignedTo", "array-contains", kidId), where("status", "==", "approved"));
+        const snap = await getDocs(q);
+        let todayCount = 0;
+        snap.forEach(doc => {
+          const c = doc.data();
+          if (c.completedAt) {
+            const cDate = c.completedAt.toDate ? c.completedAt.toDate() : new Date(c.completedAt);
+            if (cDate >= todayStart) todayCount++;
+          }
+        });
+        if (todayCount >= 3) {
+          await checkAchievement(kidId, "colonist", 3, settings);
+        }
+      } catch (e) { console.error(e); }
+
+      // Send direct Telegram notification to Kid
         if (kid.telegramChatId) {
           await sendTelegramNotification(
             `⚡ <b>Новый квест для тебя!</b>
@@ -423,6 +457,39 @@ export default function ParentDashboard({
         );
       }
 
+      
+      // Check achievements
+      await checkAchievement(kidId, "first_steps", 1, settings);
+      await checkAchievement(kidId, "stalker", 1, settings);
+      
+      if (chore.acceptedAt && chore.completedAt) {
+        const acceptedDate = chore.acceptedAt.toDate ? chore.acceptedAt.toDate() : new Date(chore.acceptedAt);
+        const completedDate = chore.completedAt.toDate ? chore.completedAt.toDate() : new Date(chore.completedAt);
+        const diffMs = completedDate.getTime() - acceptedDate.getTime();
+        if (diffMs <= 5 * 60 * 1000) {
+          await checkAchievement(kidId, "easy_peasy", 1, settings);
+        }
+      }
+      
+      try {
+        const todayStart = new Date();
+        todayStart.setHours(0,0,0,0);
+        const choresRef = collection(db, "chores");
+        const q = query(choresRef, where("assignedTo", "array-contains", kidId), where("status", "==", "approved"));
+        const snap = await getDocs(q);
+        let todayCount = 0;
+        snap.forEach(doc => {
+          const c = doc.data();
+          if (c.completedAt) {
+            const cDate = c.completedAt.toDate ? c.completedAt.toDate() : new Date(c.completedAt);
+            if (cDate >= todayStart) todayCount++;
+          }
+        });
+        if (todayCount >= 3) {
+          await checkAchievement(kidId, "colonist", 3, settings);
+        }
+      } catch (e) { console.error(e); }
+
       // Send direct Telegram notification to Kid
       if (kid.telegramChatId) {
         await sendTelegramNotification(
@@ -470,6 +537,39 @@ export default function ParentDashboard({
           settings.telegramChatId
         );
       }
+
+      
+      // Check achievements
+      await checkAchievement(kidId, "first_steps", 1, settings);
+      await checkAchievement(kidId, "stalker", 1, settings);
+      
+      if (chore.acceptedAt && chore.completedAt) {
+        const acceptedDate = chore.acceptedAt.toDate ? chore.acceptedAt.toDate() : new Date(chore.acceptedAt);
+        const completedDate = chore.completedAt.toDate ? chore.completedAt.toDate() : new Date(chore.completedAt);
+        const diffMs = completedDate.getTime() - acceptedDate.getTime();
+        if (diffMs <= 5 * 60 * 1000) {
+          await checkAchievement(kidId, "easy_peasy", 1, settings);
+        }
+      }
+      
+      try {
+        const todayStart = new Date();
+        todayStart.setHours(0,0,0,0);
+        const choresRef = collection(db, "chores");
+        const q = query(choresRef, where("assignedTo", "array-contains", kidId), where("status", "==", "approved"));
+        const snap = await getDocs(q);
+        let todayCount = 0;
+        snap.forEach(doc => {
+          const c = doc.data();
+          if (c.completedAt) {
+            const cDate = c.completedAt.toDate ? c.completedAt.toDate() : new Date(c.completedAt);
+            if (cDate >= todayStart) todayCount++;
+          }
+        });
+        if (todayCount >= 3) {
+          await checkAchievement(kidId, "colonist", 3, settings);
+        }
+      } catch (e) { console.error(e); }
 
       // Send direct Telegram notification to Kid
       if (kid.telegramChatId) {
@@ -643,6 +743,39 @@ export default function ParentDashboard({
           settings.telegramChatId
         );
       }
+
+      
+      // Check achievements
+      await checkAchievement(kidId, "first_steps", 1, settings);
+      await checkAchievement(kidId, "stalker", 1, settings);
+      
+      if (chore.acceptedAt && chore.completedAt) {
+        const acceptedDate = chore.acceptedAt.toDate ? chore.acceptedAt.toDate() : new Date(chore.acceptedAt);
+        const completedDate = chore.completedAt.toDate ? chore.completedAt.toDate() : new Date(chore.completedAt);
+        const diffMs = completedDate.getTime() - acceptedDate.getTime();
+        if (diffMs <= 5 * 60 * 1000) {
+          await checkAchievement(kidId, "easy_peasy", 1, settings);
+        }
+      }
+      
+      try {
+        const todayStart = new Date();
+        todayStart.setHours(0,0,0,0);
+        const choresRef = collection(db, "chores");
+        const q = query(choresRef, where("assignedTo", "array-contains", kidId), where("status", "==", "approved"));
+        const snap = await getDocs(q);
+        let todayCount = 0;
+        snap.forEach(doc => {
+          const c = doc.data();
+          if (c.completedAt) {
+            const cDate = c.completedAt.toDate ? c.completedAt.toDate() : new Date(c.completedAt);
+            if (cDate >= todayStart) todayCount++;
+          }
+        });
+        if (todayCount >= 3) {
+          await checkAchievement(kidId, "colonist", 3, settings);
+        }
+      } catch (e) { console.error(e); }
 
       // Send direct Telegram notification to Kid
       const kid = kids.find(k => k.id === purchase.kidId);
@@ -822,6 +955,65 @@ export default function ParentDashboard({
       </div>
 
       {/* CHORES VIEW */}
+      
+      {view === "kids" && (
+        <div className="space-y-6">
+          <div className="bg-white border border-slate-100 rounded-3xl p-6 shadow-sm">
+            <h2 className="text-xl font-black text-slate-800 flex items-center gap-2 mb-6">
+              <Users className="w-6 h-6 text-indigo-500" />
+              Управление детьми и достижениями
+            </h2>
+            <div className="space-y-6">
+              {kids.map(kid => (
+                <div key={kid.id} className="p-4 bg-slate-50 border border-slate-200 rounded-3xl">
+                  <div className="flex justify-between items-center mb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="text-3xl bg-white p-2 rounded-xl border border-slate-100">{kid.avatar}</div>
+                      <div>
+                        <h3 className="font-bold text-slate-800 text-lg">{kid.name}</h3>
+                        <p className="text-xs text-slate-500 font-bold">Баланс: {kid.points} 🪙</p>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="mt-4">
+                    <h4 className="text-xs font-bold text-slate-400 uppercase mb-3">Достижения</h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {ACHIEVEMENTS.map(ach => {
+                        const userAch = (kid.achievements || {})[ach.id];
+                        const isCompleted = userAch?.completed || false;
+                        return (
+                          <div key={ach.id} className={`p-3 rounded-2xl border flex items-center gap-3 ${isCompleted ? 'bg-amber-50 border-amber-200' : 'bg-white border-slate-200'}`}>
+                            <div className={`text-2xl ${!isCompleted && 'opacity-30 grayscale'}`}>{ach.icon}</div>
+                            <div className="flex-1">
+                              <h5 className="font-bold text-xs text-slate-700">{ach.title}</h5>
+                              <button 
+                                onClick={async () => {
+                                  try {
+                                    const updates = {
+                                      [`achievements.${ach.id}.completed`]: !isCompleted,
+                                      [`achievements.${ach.id}.progress`]: !isCompleted ? ach.target : 0
+                                    };
+                                    await updateDoc(doc(db, "users", kid.id), updates);
+                                  } catch (e) { console.error(e); }
+                                }}
+                                className={`mt-1 text-[9px] font-bold px-2 py-0.5 rounded transition-colors cursor-pointer ${isCompleted ? 'bg-amber-200 text-amber-800 hover:bg-amber-300' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                              >
+                                {isCompleted ? "Снять" : "Выдать"}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {view === "chores" && (
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
           {/* New Chore creator */}
